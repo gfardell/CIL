@@ -1,8 +1,8 @@
 #include "utilities.h"
 #include "iostream"
 
-#ifdef USE_IPP
 
+#if USE_IPP
 #include "ippcore.h"
 int initialise(void)
 {
@@ -10,20 +10,14 @@ int initialise(void)
 	ippInit();
 	return 0;
 }
-
-
 #endif // USE_IPP
 
-#ifndef USE_IPP
-
-void initialise(void)
-{}
+#if !USE_IPP
+int initialise(void)
+{
 	return 0;
 }
-
-#endif // !USE_IPP
-
-
+#endif
 
 void threads_setup(int nThreads_requested, int *nThreads_current)
 {
