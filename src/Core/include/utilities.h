@@ -5,7 +5,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-	DLL_EXPORT int initialise();
+	DLL_EXPORT int initialise(void);
 #ifdef __cplusplus
 }
 #endif
