@@ -36,6 +36,7 @@ else:
     raise ValueError('Not supported platform, ', platform.system())
 
 cilacc = ctypes.cdll.LoadLibrary(dll)
+cilacc.initialise()
 
 def find_key(dic, val):
     """return the key of dictionary dic given the value"""

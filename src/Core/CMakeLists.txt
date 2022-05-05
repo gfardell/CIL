@@ -60,6 +60,8 @@ else()
   message("IPP libraries not found, FBP_filtering not in build")
 endif()
 
+add_compile_definitions(USE_IPP)
+
 if(USE_IPP)
   add_library(cilacc SHARED ${CMAKE_CURRENT_SOURCE_DIR}/utilities.cpp
                             ${CMAKE_CURRENT_SOURCE_DIR}/axpby.cpp
