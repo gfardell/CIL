@@ -4,7 +4,8 @@ channels:
   - intel
   - ccpi
   - defaults
-  - astra-toolbox/label/dev
+  - astra-toolbox
+  - astra-toolkit/labels/dev
 dependencies:
   - dxchange
   - python-wget

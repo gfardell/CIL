@@ -15,6 +15,9 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-from .Reconstructor import Reconstructor
+from .Reconstructor import Reconstructor, IterativeReconstructor
 from .FBP import FBP
 from .FBP import FDK
+from .Tikhonov import Tikhonov
+from .TV import TV
+

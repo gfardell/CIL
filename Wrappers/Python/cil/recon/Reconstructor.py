@@ -18,6 +18,7 @@
 from cil.framework import AcquisitionData, ImageGeometry, DataOrder
 import importlib
 import weakref
+import logging
 
 class Reconstructor(object):
     
@@ -159,3 +160,129 @@ class Reconstructor(object):
             repres += "\t" + str(dim[0]) + ': ' + str(dim[1]) +'\n'
 
         return repres
+
+
+class IterativeReconstructor(Reconstructor):
+    
+    """ Abstract class representing an iterative reconstructor 
+    """
+
+    @property
+    def alpha(self):
+        return self._alpha
+
+
+    def __init__ (self, input, image_geometry=None, backend='tigre'):
+
+        super().__init__(input, image_geometry, backend)
+
+        self._device='gpu'
+        self._algorithm = None
+        self._alpha = 1.0
+        self.set_attenuation_window()
+
+
+    def set_input(self, input):
+        super().set_input(input)
+
+
+    def set_device(self,device='gpu'):
+        '''
+        Run on GPU or CPU
+        '''
+        if device == 'cpu':
+            if self.backend == 'astra': #and parallel?
+                self._device='cpu'
+            else:
+                print("cannot")
+                self._device='gpu'
+
+        self.configure_operators()
+
+
+    def set_alpha(self,alpha=1):
+        '''
+        Sets the ratio between the data fidelity and the regularistion
+        '''
+        self._alpha=float(alpha)
+        self._algorithm = None
+
+
+    def set_initial(self, initial=None):
+        '''
+        can be image, or string 'FBP'
+        '''
+        self.initial = ImageGeometry.allocate(0)
+        self._algorithm = None
+
+
+    def set_image_geometry(self, image_geometry=None):
+
+        self._algorithm = None
+        super().set_image_geometry(image_geometry)
+        if not hasattr(self,'_Op_proj') or self._Op_proj.domain_geometry != self.image_geometry:
+            self.configure_operators()
+
+
+    def configure_operators(self):
+
+        if self.backend=='tigre':
+            self._Op_proj = self._PO_class(self.image_geometry, self.acquisition_geometry)
+        else:
+            self._Op_proj = self._PO_class(self.image_geometry, self.acquisition_geometry, device=self._device)
+
+
+    def reset_algorithm(self):
+        """
+        Resets the algorithm to it's initial state
+        """
+        self._algorithm = None
+        self._algorithm = self._initialise_algorithm()
+        print("resetting the algorithm to it's initial state")
+
+
+    def reset(self):
+        self.set_alpha()
+        self.set_device()
+        self.set_image_geometry()
+        self.set_initial()
+
+
+    def _initialise_algorithm(self):
+        raise NotImplementedError()
+
+
+    def run(self, iterations=1, verbose=1):
+        """
+        Runs the configured reconstructor and returns the reconstruction
+
+        Parameters
+        ----------
+        verbose : int, default=1
+           Contols the verbosity of the reconstructor. 0: No output is logged, 1: Full configuration is logged
+
+        Returns
+        -------
+        ImageData
+            The reconstructed volume. Suppressed if `out` is passed
+        """
+
+        if verbose:
+            print(self)
+
+        if self._algorithm is None:
+            self._initialise_algorithm()
+
+        self._algorithm.run(iterations)
+
+        return self._algorithm.get_output()
+
+
+    def _str_options(self):
+           
+        repres += "\nReconstruction Options:\n"
+        repres += "\tBackend: {}\n".format(self._backend)             
+        repres += "\tDevice: {}\n".format(self._device)             
+        repres += "\tAlpha: {}\n".format(self._alpha)
+
+        return repres   
