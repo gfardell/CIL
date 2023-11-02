@@ -22,7 +22,6 @@ import json
 import logging
 import h5py
 
-logger = logging.getLogger(__name__)
 
 def get_compress(compression=None):
     '''Returns whether the data needs to be compressed and to which numpy type
@@ -43,7 +42,7 @@ def get_compress(compression=None):
     
     '''
     if isinstance(compression, int):
-        logger.warning("get_compress: The use of int is deprecated and will be removed in the future. Use string instead.")
+        logging.warning("get_compress: The use of int is deprecated and will be removed in the future. Use string instead.")
 
     if compression is None or compression == 0:
         compress = False
@@ -73,7 +72,7 @@ def get_compressed_dtype(data, compression=None):
     dtype : numpy type, the numpy type to be used for compression
     '''
     if isinstance(compression, int):
-        logger.warning("get_compressed_dtype: The use of int is deprecated and will be removed in the future. Use string instead.")
+        logging.warning("get_compressed_dtype: The use of int is deprecated and will be removed in the future. Use string instead.")
     if compression is None or compression == 0:
         dtype = data.dtype
     elif compression in [ 8, 'uint8']:
@@ -102,7 +101,7 @@ def get_compression_scale_offset(data, compression=0):
     '''
 
     if isinstance(compression, int):
-        logger.warning("get_compression_scale_offset: The use of int is deprecated and will be removed in the future. Use string instead.")
+        logging.warning("get_compression_scale_offset: The use of int is deprecated and will be removed in the future. Use string instead.")
 
     if compression is None or compression == 0:
         # no compression
@@ -158,6 +157,7 @@ def compress_data(data, scale, offset, dtype):
         tmp = data * scale + offset
         tmp = tmp.astype(dtype)
     return tmp
+
 
 class HDF5_utilities(object): 
 
@@ -324,3 +324,181 @@ class HDF5_utilities(object):
         with h5py.File(filename, 'r') as f:
             dset = f.get(dset_path)
             dset.read_direct(out, source_sel, dest_sel)
+
+
+
+class Tiff_utilities(object): 
+
+    pilAvailable = True
+    try:    
+        from PIL import Image
+    except:
+        pilAvailable = False
+    """
+    Utility methods to read in from a Tiff file and extract the relevant data
+    """
+
+    @staticmethod
+    def get_dataset_metadata(filename):
+        """
+        Returns the dataset metadata as a dictionary
+
+        Parameters
+        ----------
+        filename: str
+            The full path to the tiff file
+
+        Returns
+        -------
+        A dictionary containing keys, values are `None` if attribute can't be read.
+            ndim, shape, size, dtype, nbytes, compression, chunks, is_virtual
+        """
+
+        with Tiff_utilities.Image.open(filename) as img:
+
+            w, h = img.size
+
+            attribs = {
+                'dtype':Tiff_utilities._get_file_type(img),
+                'height': h,
+                'width' : w
+            }
+
+        return attribs
+
+    @staticmethod
+    def _get_file_type(img): 
+        mode = img.mode
+        if mode == '1':
+            dtype = np.bool_
+        elif mode == 'L':
+            dtype = np.uint8
+        elif mode == 'F':
+            dtype = np.float32
+        elif mode == 'I':
+            dtype = np.int32
+        elif mode in ['I;16']:
+            dtype = np.uint16
+        else:
+            raise ValueError("Unsupported type {}. Expected any of 1 L I I;16 F.".format(mode))
+        return dtype
+    
+
+    @staticmethod
+    def read(filename, crop_roi=None, method_downsample=None, shape_out=None, dtype=np.float32):
+        """
+        Reads a tiff image and returns a numpy array with the requested data
+
+        Parameters
+        ----------
+        filename: str
+            The full path to the file
+        crop_roi: list of pixels indices defining roi, optional
+            Left, Top, Right, Bottom
+        method_downsample: string, optional
+            'slice' 'bin'         
+        shape_out: tuple, optional
+            must be provided if downsampling (i.e. `slice` or `bin`) 
+        dtype: numpy type, default np.float32
+            the numpy data type for the returned array
+    
+        Returns
+        -------
+        numpy.ndarray
+            The requested data
+
+        """
+
+        with Tiff_utilities.Image.open(filename, mode='r', formats=(['tiff'])) as f:
+
+            if method_downsample is None:
+                pass
+            elif method_downsample == 'slice':
+                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.NEAREST, crop_roi)
+            elif method_downsample == 'bin':
+                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.BILINEAR, crop_roi)
+            elif method_downsample == 'crop':
+                f = f.crop(crop_roi)
+
+            arr = np.asarray(f, dtype=dtype, order='C')
+
+        return arr 
+
+
+    @staticmethod
+    def read_to(filename, out, dest_sel=None, crop_roi=None, method_downsample=None, shape_out=None):
+        """
+        Reads a tiff image and returns a numpy array with the requested data
+
+        Parameters
+        ----------
+        filename: str
+            The full path to the file
+        crop_roi: list of pixels, optional
+            Left, Top, Right, Bottom
+        method_downsample: string, optional
+            'slice' 'bin'         
+        shape_out: tuple, optional
+            must be provided if downsampling (i.e. `slice` or `bin`) 
+        dtype: numpy type, default np.float32
+            the numpy data type for the returned array
+    
+        Returns
+        -------
+        numpy.ndarray
+            The requested data
+
+        """
+
+        with Tiff_utilities.Image.open(filename, mode='r', formats=(['tiff'])) as f:
+
+            if method_downsample is None:
+                pass
+            elif method_downsample == 'slice':
+                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.NEAREST, crop_roi)
+            elif method_downsample == 'bin':
+                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.BILINEAR, crop_roi)
+            elif method_downsample == 'crop':
+                f = f.crop(crop_roi)
+
+            out[dest_sel] = np.asarray(f, dtype=out.dtype, order='C')
+
+
+    @staticmethod
+    def read_to(filename, out, dest_sel=None, crop_roi=None, method_downsample=None, shape_out=None):
+        """
+        Reads a tiff image and returns a numpy array with the requested data
+
+        Parameters
+        ----------
+        filename: str
+            The full path to the file
+        crop_roi: list of pixels, optional
+            Left, Top, Right, Bottom
+        method_downsample: string, optional
+            'slice' 'bin'         
+        shape_out: tuple, optional
+            must be provided if downsampling (i.e. `slice` or `bin`) 
+        dtype: numpy type, default np.float32
+            the numpy data type for the returned array
+    
+        Returns
+        -------
+        numpy.ndarray
+            The requested data
+
+        """
+
+        with Tiff_utilities.Image.open(filename, mode='r', formats=(['tiff'])) as f:
+
+            if method_downsample is None:
+                pass
+            elif method_downsample == 'slice':
+                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.Resampling.NEAREST, crop_roi)
+            elif method_downsample == 'bin':
+                f = f.convert("F")
+                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.Resampling.BILINEAR, crop_roi)
+            elif method_downsample == 'crop':
+                f = f.crop(crop_roi)
+
+            out[dest_sel] = np.asarray(f, dtype=out.dtype, order='C')
