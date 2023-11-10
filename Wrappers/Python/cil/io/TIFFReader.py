@@ -17,7 +17,7 @@
 # Authors:
 # CIL Developers, listed at: https://github.com/TomographicImaging/CIL/blob/master/NOTICE.txt
 
-from cil.framework import AcquisitionData, AcquisitionGeometry, ImageGeometry, ImageData
+from cil.framework import AcquisitionData, AcquisitionGeometry, ImageGeometry, ImageData, DataContainer
 from .utilities import Tiff_utilities
 import os
 import glob
@@ -28,8 +28,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
-class TIFFStackReader(object):
+class TIFFReader(object):
 
     """
     A TIFF reader. 
@@ -39,83 +38,61 @@ class TIFFStackReader(object):
     file_name : str, list, abspath to folder/file
         The absolute file path to a TIFF file, or a list of absolute file paths to TIFF files. Or an absolute directory path to a folder containing TIFF files.
 
+    dimension_labels : tuple of strings
+        The labels of the dimensions of the TIFF file(s) being read.
+        The data will be structured as 'images', 'image height', 'image width' so the dimension labels should be in this order.
+
+    dtype : numpy.dtype, default np.float32
+        The data type returned with 'read'
+
 
     deprecated_kwargs
     -----------------
 
-    roi : dictionary, default `None`, pending deprecation
-        Use methods `set_image_indices()` and `set_image_roi()` to configure your reader instead.
-    
-        Dictionary with ROI to load:
-        ``{'axis_0': (start, end, step),
-            'axis_1': (start, end, step),
-            'axis_2': (start, end, step)}``
+    roi : dictionary, default `None`, deprecated
+        This has been deprecated. Use proccessor `Slicer` or `Binner` instead (see examples below).
 
-    mode : str, {'bin', 'slice'}, default 'bin', pending deprecation
-        Use `set_image_roi()` to set the 'bin'/'slicing' behaviour.
-        In 'bin' mode, N pixels are averaged together. In 'slice' mode 1 in N pixels are used. N is determined by the 'step' parameter in the ROI dictionary.
-
+    mode : str, {'bin', 'slice'}, default 'bin', deprecated
+        This has been deprecated. Use proccessor `Slicer` or `Binner` instead (see examples below).
         
     transpose : tuple, default `None`, deprecated
         This has been deprecated. Please define your geometry accordingly. 
 
-    dtype : numpy type, string, default np.float32
-        Requested type of the read image. If set to None it defaults to the type of the saved file. Use read(dtype) instead.
-
-
-    Notes
-    -----
-    ROI behaviour (deprecated):
-        Files are stacked along ``axis_0``, in alphabetical order.
-
-        ``axis_1`` and ``axis_2`` correspond to row and column dimensions, respectively.
-
-        To skip files or to change the number of files to load, adjust ``axis_0``. For instance, ``'axis_0': (100, 300)``
-        will skip the first 100 files and will load 200 files.
-
-        ``'axis_0': -1`` is a shortcut to load all elements along axis 0.
-
-        ``start`` and ``end`` can be specified as ``None`` which is equivalent to ``start = 0`` and ``end = load everything to the end``, respectively.
-
-        Start and end also can be negative.
-
-        ROI is specified for axes before transpose.
-
-
+        
     Example
     -------
 
-    Select spcific indices from a TIFF stack and read only them in: 
+    To read a TIFF stack, use the following code:
+
+    >>> reader = TIFFStackReader(file_name = '/path/to/folder', dimension_labels=('vertical','horizontal_y','horizontal_x')
+    >>> reader.get_image_list()
+    ['/path/to/folder/0001.tif', '/path/to/folder/0002.tif', '/path/to/folder/0003.tif', ...]
+    >>> data = reader.read()
+
+    
+    To read as subset of you data use this reader with the processor `Slicer` as follows:
+
+    >>> reader = TIFFStackReader(file_name = '/path/to/folder', dimension_labels=('angles','vertical','horizontal')
+    >>> roi = {'angles':(None,None,10), 'vertical':(100), 'horizontal':(50,-50)}
+    >>> slicer = Slicer(roi)
+    >>> slicer.set_input(reader)
+    >>> data = slicer.get_output()
+
+        
+    To return an ImageData, use the following code:
 
     >>> reader = TIFFStackReader(file_name = '/path/to/folder')
     >>> reader.get_image_list()
     ['/path/to/folder/0001.tif', '/path/to/folder/0002.tif', '/path/to/folder/0003.tif', ...]
-    >>> reader.set_image_indices([0, 1, 2, 8, 9])
-    >>> data = reader.read()
+    >>> data = reader.read_as_ImageData(image_geometry)
 
-    Select a region of interest (ROI) from a TIFF and read it:
-
-    >>> reader = TIFFStackReader(file_name = '/path/to/file.tiff')
-    >>> reader.set_image_roi(height = (10, -10, 1), width = (0, 100, 1))
-    >>> data = reader.read()
-
-    Read in a TIFF stack with binning factor 2:
-
-    >>> reader = TIFFStackReader(file_name = '/path/to/folder')
-    >>> reader.set_image_roi(height = (None, None, 2), width = (None, None, 2), mode = 'bin')
-    >>> data = reader.read()
-
-    Read in 1 in 10 images in a TIFF stack:
-
-    >>> reader = TIFFStackReader(file_name = '/path/to/folder')
-    >>> reader.set_image_indices((None, None, 10))
-    >>> data = reader.read()
-
+    
     You can rescale the read data as `rescaled_data = (read_data - offset)/scale` with the following code:
 
     >>> reader = TIFFStackReader(file_name = '/path/to/folder')
     >>> rescaled_data = reader.read_rescaled(scale, offset)
 
+    
     Alternatively, if TIFFWriter has been used to save data with lossy compression, then you can rescale the
     read data to approximately the original data with the following code:
 
@@ -123,9 +100,64 @@ class TIFFStackReader(object):
     >>> writer.write(original_data)
     >>> reader = TIFFStackReader(file_name = '/path/to/folder')
     >>> about_original_data = reader.read_rescaled()
+
+
+    Notes
+    -----
+
+    When reading a TIFF stack, the reader will sort the TIFF files found in the folder in to natural sort order.
+    This will sort first alphabetically, then numerically leading to the sorting: 1.tif, 2.tif, 3.tif, 10.tif, 11.tif
+    The users can see the order with the method `get_image_list()`. The user can also pass an ordered list of TIFF
+    files to the reader, in which case the user's order will be used.
+
     """
 
 
+    class data(object):
+        
+        """
+        spoof array in reader
+        """
+        def __init__(self, shape, dtype, read_function):
+            self._shape = shape
+            self._dtype = dtype
+            self._read_slice = read_function
+
+        @property
+        def ndim(self):
+            return 3 if self.shape[0] > 1 else 2
+        
+        @property
+        def shape(self):
+            return self._shape
+        
+        @property
+        def dtype(self):
+            return self._dtype
+        
+        @property
+        def size(self):
+            return np.prod(self.shape)
+        
+        
+        def __getitem__(self, key):
+
+            if isinstance(key, tuple):
+                len_key = len(key)
+
+                list_slices = [item if isinstance(item, slice) else slice(item, item+1) for item in key]
+
+                if len_key == 2 and self.ndim == 2:
+                    return self._read_slice(images_slice=None, height_slice=list_slices[0], width_slice=list_slices[1])
+                elif len_key == 3 and self.ndim == 3:
+                    return self._read_slice(images_slice=list_slices[0], height_slice=list_slices[1], width_slice=list_slices[2])
+                else:
+                    raise ValueError("Expected a tuple of ndim slices or ints, expected length {} got length {}".format(self.ndim, len_key))
+                
+            else:
+                raise ValueError("Expected a tuple of ndim slices or ints, got key as {}".format(type(key)))
+            
+            
     def _deprecated_kwargs(self, deprecated_kwargs):
         """
         Handle deprecated keyword arguments for backward compatibility.
@@ -138,62 +170,59 @@ class TIFFStackReader(object):
         Notes
         -----
         This method is called by the __init__ method.
-
-        `mode` and `roi` will be removed in the future. If passed they will be used to configure the reader.
-
-        `transpose` has been removed. Please define your geometry accordingly.
-
-        `dtype` has been removed. Please use the dtype argument in the read method instead.
         """
 
-        mode = 'bin'
         if deprecated_kwargs.get('mode', False):
-            logging.warning("Input argument `mode` has been deprecated. Please define binning/slicing with method 'set_image_roi()' instead")
-            mode = deprecated_kwargs.pop('mode')
+            raise ValueError("Input argument `mode` has been deprecated. Please use processors 'Binner' or 'Slicer' instead")
 
         if deprecated_kwargs.get('roi', False):
-            logging.warning("Input argument `roi` has been deprecated. Please use methods 'set_image_roi()' and 'set_frame_indices()' instead")
-            roi = deprecated_kwargs.pop('roi')
-            self.set_image_indices(roi.get('axis_0'), mode)
-            self.set_image_roi(roi.get('axis_1'), roi.get('axis_2'), mode)
+           raise ValueError("Input argument `roi` has been deprecated. Please use processors 'Binner' or 'Slicer' instead")
 
         if deprecated_kwargs.pop('transpose', None) is not None:
             raise ValueError("Input argument `transpose` has been deprecated. Please define your geometry accordingly")
-
-        if deprecated_kwargs.pop('dtype', None) is not None:
-            raise ValueError("Input argument `dtype` has been deprecated. Please use the dtype argument in the read method instead.")
 
         if deprecated_kwargs:
             logging.warning("Additional keyword arguments passed but not used: {}".format(deprecated_kwargs))
 
 
-    def __init__(self, file_name, **deprecated_kwargs):
+    def __init__(self, file_name, dimension_labels, dtype=np.float32, **deprecated_kwargs):
 
         if (Tiff_utilities.pilAvailable == False):
             raise Exception("PIL (pillow) is not available, cannot load TIFF files.")
 
-        self.set_up(file_name = file_name,
+        self.set_up(file_name = file_name, dimension_labels=dimension_labels, dtype=dtype,
                      **deprecated_kwargs)
 
 
     def set_up(self,
                file_name,
+               dimension_labels,
+               dtype=np.float32,
                **deprecated_kwargs):
         """
-        Sets up the TIFFReader object.
+        Reconfigures the TIFFReader object.
 
         Parameters
         ----------
-        file_name : str, abspath to folder, list
-            Path to folder with TIFF files, list of paths of TIFFs, or path to single TIFF file
+        file_name : str, list, abspath to folder/file
+            The absolute file path to a TIFF file, or a list of absolute file paths to TIFF files. Or an absolute directory path to a folder containing TIFF files.
+
+        dimension_labels : tuple of strings
+            The labels of the dimensions of the TIFF file(s) being read.
+            The data will be structured as 'images', 'image height', 'image width' so the dimension labels should be in this order.
+
+        dtype : numpy.dtype, default np.float32
+            The data type returned with 'read'
 
         """
 
         self._deprecated_kwargs(deprecated_kwargs)
 
         # find all tiff files
+        sorted = False
         if isinstance(file_name, list):
             self._tiff_files = file_name
+            sorted = True
         elif os.path.isfile(file_name):
             self._tiff_files = [file_name]
         elif os.path.isdir(file_name):
@@ -217,28 +246,51 @@ class TIFFStackReader(object):
                 raise Exception("file_name expects a tiff file, a list of tiffs, or a directory containing tiffs.\n{}".format(file_name))
 
         # sort the files alphabetically
-        self._tiff_files.sort(key=self.__natural_keys)
+        if not sorted:
+            self._tiff_files.sort(key=self.__natural_keys)
 
         # use the first image to determine the image parameters
-        self._image_param_in = Tiff_utilities.get_dataset_metadata(self._tiff_files[0])
+        image_param_in = Tiff_utilities.get_dataset_metadata(self._tiff_files[0])
         num_images = len(self._tiff_files)
-        self._image_param_in['num_images'] = num_images
 
-        self._shape_in = [num_images, self._image_param_in['height'], self._image_param_in['width']]
+        dtype = image_param_in['dtype'] if dtype is None else dtype
+        shape = [num_images, image_param_in['height'], image_param_in['width']]
 
-
-        # set up the default ROI and indices
-        self._roi_image = {'height':slice(None),'width':slice(None),'method_downsample':None}
-        self._indices_stack = {'images':range(num_images),'method_downsample':'slice'}
-        self._shape_out = self._shape_in.copy()
+        self._dimension_labels = dimension_labels 
+        self._array = self.data(shape, dtype, self._read_slice)
 
 
     @property
-    def file_name(self):
-        """Returns the name of the TIFF file being read."""
+    def array(self):
+        """Returns the array-like object of the TIFF file(s) being read. Elements can be accessed via numpy advanced indexing. Slicing order is defined by the dimension labels"""
 
-        return self._file_name
+        return self._array
+        
+    
+    @property
+    def ndim(self):
+        """Returns the number of dimensions of the TIFF file(s) being read."""
 
+        return self.array.ndim
+    
+    @property
+    def shape(self):
+        """Returns the shape of the TIFF file(s) being read."""
+
+        return self.array.shape
+
+    @property
+    def dtype(self):
+        """Returns the data type of the TIFF file(s) being read."""
+
+        return self.array.dtype
+    
+    @property
+    def dimension_labels(self):
+        """Returns the dimension labels of the TIFF file(s) being read."""
+
+        return self._dimension_labels
+    
 
     def get_image_list(self):
         """
@@ -250,223 +302,82 @@ class TIFFStackReader(object):
         return self._tiff_files.copy()
 
 
-    def reset(self):
+    def read(self):
         """
-        Resets the region of interest (ROI) to the full image, and the indices to all tiffs.
-        """
-        self.set_image_roi()
-        self.set_image_indices()
-        self._shape_out = self._shape_in.copy()
-
-
-    def _parse_slice(self, roi, axis):
-        """
-        Given a roi object returns a slice object
-
-        axis = 'width' or 'height'
-
-        Parameters
-        ----------
-        roi : slice, tuple, int, None
-            The roi object to be used.
+        Reads the images and returns a datacontainer. Dimension labels and dtype are configured by the reader.
 
         Returns
         -------
-        slice
-            The slice object to be used.
+        DataContainer: The read data
         """
 
-        if roi == -1 or roi is None:
-            return slice(None)
-        elif isinstance(roi,tuple):
-            return slice(*roi)
-        elif isinstance(roi, int):
-            return slice(int(roi),int(roi)+1,1)
-        elif isinstance(roi ,slice):
-            return roi
+        # create empty data container for the array
+        array_full = np.empty(self.shape, dtype=self.dtype)
+        image_shape_PIL = (self.shape[2], self.shape[1])
 
-        raise ValueError("Cannot intepret roi as slice object for axis {}".format(axis))
+        for i in range(self.shape[0]):
+            Tiff_utilities.read_to(self._tiff_files[i], array_full, image_shape_PIL, np.s_[i,:,:])
+    
+        array_full = np.squeeze(array_full)
+        return DataContainer(array_full, dimension_labels=self.dimension_labels)
 
 
-    def set_image_roi(self, height=None, width=None,  mode=None):
+
+    def _read_slice(self, images_slice=None, height_slice=None, width_slice=None):
         """
-        Sets the region of interest (ROI) for the image.
+        Reads the ROI of an image and returns as a numpy array. This is used by `array.__getitem__` to allow numpy advanced indexing.
+        The dtype is configured by the reader.
 
         Parameters
         ----------
+        images_slice : slice, default None
+            Slice defining images to be read. If None, all images are read. This will be applied to the list retrieved with `get_image_list`
+        height_slice : slice, default None
+            Slice defining ROI of image height. Applied to all images.
+        width_slice : slice, default None
+            Slice defining ROI of image width. Applied to all images.
 
-        height : slice, tuple, int optional
-            The height of the ROI.
-        width : slice, tuple, int, optional
-            The width of the ROI.
-        mode : str, optional
-            The downsampling mode to use. Can be 'bin', 'slice', or None.
-        """
-
-        if mode not in [None, 'bin', 'slice']:
-            raise ValueError("Wrong mode, None, 'bin' or 'slice' is expected, got {}.".format(mode))
-
-        self._roi_image['height'] = self._parse_slice(height,'height')
-        self._roi_image['width'] = self._parse_slice(width,'width')
-
-
-        if self._roi_image['height'] != slice(None) or self._roi_image['width'] != slice(None):
-            if (self._roi_image['height'].step == 1 or self._roi_image['height'].step is None) and (self._roi_image['width'].step == 1 or self._roi_image['width'].step is None):
-                mode = 'crop'
-
-        self._roi_image['method_downsample'] = mode
-        self._shape_out[1] = self._get_axis_length(self._roi_image['height'],'height', self._roi_image['method_downsample'])
-        self._shape_out[2] = self._get_axis_length(self._roi_image['width'],'width', self._roi_image['method_downsample'])
-
-
-    def _get_axis_length(self, roi_slice, axis, mode):
-        """
-        Given a slice object returns the axis length
-
-        axis = 'width' or 'height'
-
-        Parameters
-        ----------
-        roi_slice : slice
-            The slice object to be used.
-        axis : str
-            The axis for which the length is being calculated.
-        mode : str
-            The downsampling mode to use. Can be 'bin' or 'slice'.
-            
         Returns
         -------
-        int
-            The length of the axis.
+        numpy narray: The read data
 
         """
-        length = self._image_param_in[axis]
-        axis_range = range(length)[roi_slice]
 
-        if mode is None or mode == 'crop':
-            axis_length = int(axis_range.stop - axis_range.start)
-        elif mode == 'slice':
-            axis_length = int(np.ceil((axis_range.stop - axis_range.start) / axis_range.step))
-        elif mode == 'bin':
-            axis_length = int(np.ceil((axis_range.stop - axis_range.start) / axis_range.step))
+        shape_out = self.shape.copy()
+        crop_box = [0, 0, self.shape[2], self.shape[1]]
+
+        if images_slice is not None:
+            axis_range_images = range(shape_out[0])[images_slice]
+            shape_out[0] = len(axis_range_images)
         else:
-            raise ValueError("Nope")
+            axis_range_images = range(shape_out[0])
 
-        return axis_length
+        if height_slice is not None:
+            axis_range = range(shape_out[1])[height_slice]
+            shape_out[1] = len(axis_range)
+            crop_box[1] = axis_range.start
+            crop_box[3] = axis_range.start + axis_range.step * (shape_out[1]-1) +1
 
-
-    def set_image_indices(self, indices=None, mode='slice'):
-        """
-        Method to configure the image indices to be read. This will be applied to the list retrieved with `get_image_list`.
-
-        Parameters
-        ----------
-
-        indices: int, tuple, list, optional
-            Takes an integer for a single image, a tuple of (start, stop, step), or a list of image indices. If None, all images will be read.
-        mode : str, optional
-            The downsampling mode to use. Can be 'bin' or 'slice'. If 'bin' indices bust be specified as (start, stop, step). 
-        """
-
-        if isinstance(indices, (list, np.ndarray)):
-            try:
-                indices = np.arange(self._image_param_in['num_images']).take(indices)
-            except IndexError:
-                raise ValueError("Index out of range")
-            
-            if mode == 'bin':
-                raise ValueError("Cannot use binning with a list of indices. Please use a tuple instead")
-            
-            num_images_out = len(indices)
-        else:
-            indices = self._parse_slice(indices,'images')
-            num_images_out = self._get_axis_length(indices,'num_images', mode)
-            indices = range(self._image_param_in['num_images'])[indices]
+        if width_slice is not None:
+            axis_range = range(shape_out[2])[width_slice]
+            shape_out[2] = len(axis_range)
+            crop_box[0] = axis_range.start
+            crop_box[2] = axis_range.start + axis_range.step * (shape_out[2]-1) +1
 
 
-        if num_images_out < 1:
-            raise ValueError("No frames selected. Please select at least 1 frame")
+        # PIL specific set up
+        shape_PIL_image = (shape_out[2], shape_out[1])
 
-        self._indices_stack['images'] = indices
-        self._indices_stack['method_downsample'] = mode
-        self._shape_out[0] = num_images_out
+        # create empty data container for the array
+        array_full = np.empty(shape_out, dtype=self.dtype)
 
+        ind_out = 0
+        for i in axis_range_images:
+            Tiff_utilities.read_to(self._tiff_files[i], array_full, shape_PIL_image, np.s_[ind_out,:,:], crop_box)
+            ind_out +=1
 
-    def read(self, dtype=np.float32):
-        """
-        Reads the images and ROI determined by methods `set_image_indices()` an `set_image_roi()` and returns a numpy array.
-
-        Parameters
-        ----------
-
-        dtype : numpy type, string, default np.float32
-            Requested type of the read image. If set to None it defaults to the type of the saved file.
-        """
-        indices = self._indices_stack['images']
-        image_height_slice = self._roi_image['height']
-        image_width_slice = self._roi_image['width']
-
-
-        if dtype is None:
-            dtype =  self._image_param_in['dtype']
-
-        if self._roi_image['method_downsample'] is None:
-            crop_box = None
-        else:
-            crop_box = [0, 0 , self._image_param_in['width'], self._image_param_in['height']]
-           
-            if image_height_slice is not None:
-                axis_range_h = range(self._image_param_in['height'])[image_height_slice]
-                crop_box[1] = axis_range_h.start
-                crop_box[3] = axis_range_h.start + self._shape_out[1] * axis_range_h.step
-
-            if image_width_slice is not None:
-                axis_range_w = range(self._image_param_in['width'])[image_width_slice]
-                crop_box[0] = axis_range_w.start
-                crop_box[2] = axis_range_w.start + self._shape_out[2] * axis_range_w.step
-
-        # create empty data container for downsized array
-        array_full = np.empty(self._shape_out, dtype=dtype)
-        if self._indices_stack['method_downsample'] == 'slice':
-            count = 0
-            for i in indices:
-                Tiff_utilities.read_to(self._tiff_files[i], array_full, np.s_[count:count+1,:,:], crop_box, self._roi_image['method_downsample'], self._shape_out[1::])
-                count+=1
-        else:
-
-            array_single = np.empty((1,*self._shape_out[1::]), dtype=dtype)
-
-            excess = len(indices) % self._indices_stack['images'].step
-
-            ind_empty = np.s_[:,:,:]
-            for i in range(self._shape_out[0]-1):
-
-                ind = i*self._indices_stack['images'].step
-
-                Tiff_utilities.read_to(self._tiff_files[ind], array_full, np.s_[i,:,:], crop_box, self._roi_image['method_downsample'], self._shape_out[1::])
-
-                for j in range(1, self._indices_stack['images'].step):
-                    # accumulates the images
-                    Tiff_utilities.read_to(self._tiff_files[ind+j], array_single,ind_empty, crop_box, self._roi_image['method_downsample'], self._shape_out[1::])
-                    array_full[i] +=array_single[0]
-
-            np.divide(array_full, self._indices_stack['images'].step, out=array_full)
-
-            i+=1
-            ind = i*self._indices_stack['images'].step
-
-
-            Tiff_utilities.read_to(self._tiff_files[ind], array_full, np.s_[i,:,:], crop_box, self._roi_image['method_downsample'], self._shape_out[1::])
-
-            for j in range(1, excess):
-                # accumulates the images
-                Tiff_utilities.read_to(self._tiff_files[ind+j], array_single, ind_empty, crop_box, self._roi_image['method_downsample'], self._shape_out[1::])
-                array_full[i] +=array_single[0]
-
-            array_full[i] /=excess
-            
         return np.squeeze(array_full)
-
+        
 
     def __atoi(self, text):
         return int(text) if text.isdigit() else text

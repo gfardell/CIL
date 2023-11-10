@@ -385,7 +385,7 @@ class Tiff_utilities(object):
     
 
     @staticmethod
-    def read(filename, crop_roi=None, method_downsample=None, shape_out=None, dtype=np.float32):
+    def read(filename, shape_out, crop_roi=None, dtype=np.float32):
         """
         Reads a tiff image and returns a numpy array with the requested data
 
@@ -393,12 +393,10 @@ class Tiff_utilities(object):
         ----------
         filename: str
             The full path to the file
-        crop_roi: list of pixels indices defining roi, optional
+        crop_roi: list of pixels defining the cropped ROI, optional
             Left, Top, Right, Bottom
-        method_downsample: string, optional
-            'slice' 'bin'         
         shape_out: tuple, optional
-            must be provided if downsampling (i.e. `slice` or `bin`) 
+            must be provided if downsampling (i.e. `slice` or `crop`)
         dtype: numpy type, default np.float32
             the numpy data type for the returned array
     
@@ -411,38 +409,30 @@ class Tiff_utilities(object):
 
         with Tiff_utilities.Image.open(filename, mode='r', formats=(['tiff'])) as f:
 
-            if method_downsample is None:
-                pass
-            elif method_downsample == 'slice':
-                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.NEAREST, crop_roi)
-            elif method_downsample == 'bin':
-                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.BILINEAR, crop_roi)
-            elif method_downsample == 'crop':
-                f = f.crop(crop_roi)
-
+            f = f.resize(shape_out, Tiff_utilities.Image.NEAREST, crop_roi)
             arr = np.asarray(f, dtype=dtype, order='C')
 
         return arr 
 
 
     @staticmethod
-    def read_to(filename, out, dest_sel=None, crop_roi=None, method_downsample=None, shape_out=None):
+    def read_to(filename, out, shape_out, dest_sel, crop_roi=None):
         """
-        Reads a tiff image and returns a numpy array with the requested data
+        Reads a tiff image and fills a numpy array at the requested slice with the requested data. If shape out is provided it will downsample the image.
 
         Parameters
         ----------
         filename: str
             The full path to the file
-        crop_roi: list of pixels, optional
+        out: numpy.ndarray
+            The output array to be filled
+        dest_sel: tuple of slice objects, optional
+            The selection of slices in each destination dimension to fill
+        crop_roi: list of pixels defining the cropped ROI, optional
             Left, Top, Right, Bottom
-        method_downsample: string, optional
-            'slice' 'bin'         
         shape_out: tuple, optional
-            must be provided if downsampling (i.e. `slice` or `bin`) 
-        dtype: numpy type, default np.float32
-            the numpy data type for the returned array
-    
+            must be provided if downsampling (i.e. `slice` or `crop`) 
+
         Returns
         -------
         numpy.ndarray
@@ -452,53 +442,6 @@ class Tiff_utilities(object):
 
         with Tiff_utilities.Image.open(filename, mode='r', formats=(['tiff'])) as f:
 
-            if method_downsample is None:
-                pass
-            elif method_downsample == 'slice':
-                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.NEAREST, crop_roi)
-            elif method_downsample == 'bin':
-                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.BILINEAR, crop_roi)
-            elif method_downsample == 'crop':
-                f = f.crop(crop_roi)
-
+            f = f.resize(shape_out, Tiff_utilities.Image.NEAREST, crop_roi)
             out[dest_sel] = np.asarray(f, dtype=out.dtype, order='C')
 
-
-    @staticmethod
-    def read_to(filename, out, dest_sel=None, crop_roi=None, method_downsample=None, shape_out=None):
-        """
-        Reads a tiff image and returns a numpy array with the requested data
-
-        Parameters
-        ----------
-        filename: str
-            The full path to the file
-        crop_roi: list of pixels, optional
-            Left, Top, Right, Bottom
-        method_downsample: string, optional
-            'slice' 'bin'         
-        shape_out: tuple, optional
-            must be provided if downsampling (i.e. `slice` or `bin`) 
-        dtype: numpy type, default np.float32
-            the numpy data type for the returned array
-    
-        Returns
-        -------
-        numpy.ndarray
-            The requested data
-
-        """
-
-        with Tiff_utilities.Image.open(filename, mode='r', formats=(['tiff'])) as f:
-
-            if method_downsample is None:
-                pass
-            elif method_downsample == 'slice':
-                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.Resampling.NEAREST, crop_roi)
-            elif method_downsample == 'bin':
-                f = f.convert("F")
-                f = f.resize((shape_out[-1],shape_out[-2]), Tiff_utilities.Image.Resampling.BILINEAR, crop_roi)
-            elif method_downsample == 'crop':
-                f = f.crop(crop_roi)
-
-            out[dest_sel] = np.asarray(f, dtype=out.dtype, order='C')

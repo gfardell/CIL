@@ -114,7 +114,9 @@ class Slicer(DataProcessor):
             The input DataContainer or Geometry
         """
 
-        if issubclass(type(dataset), DataContainer) or isinstance(dataset,(AcquisitionGeometry,ImageGeometry)):
+        # if it acts like a data container or is a geometry then accept
+        if all(hasattr(dataset, attr) for attr in ["array", "dimension_labels"]) \
+        or isinstance(dataset,(AcquisitionGeometry,ImageGeometry)):
             if self.check_input(dataset):
                 self.__dict__['input'] = weakref.ref(dataset)
                 self.__dict__['shouldRun'] = True
@@ -127,21 +129,16 @@ class Slicer(DataProcessor):
 
     def check_input(self, data):
 
-        if isinstance(data, (ImageData,AcquisitionData)):
+        self._data_array = False
+
+        if hasattr(data, 'array'):
             self._data_array = True
+
+        if hasattr(data, 'geometry'):            
             self._geometry = data.geometry
 
-        elif isinstance(data, DataContainer):
-            self._data_array = True
-            self._geometry = None
-
-        elif isinstance(data, (ImageGeometry, AcquisitionGeometry)):
-            self._data_array = False
+        if isinstance(data, (ImageGeometry, AcquisitionGeometry)):
             self._geometry = data
-
-        else:
-            raise TypeError('Processor supports following data types:\n' +
-                            ' - ImageData\n - AcquisitionData\n - DataContainer\n - ImageGeometry\n - AcquisitionGeometry')
 
         if self._data_array:
             if data.dtype != np.float32:
@@ -371,9 +368,14 @@ class Slicer(DataProcessor):
         """
         Slice the data array
         """
-        slice_obj = tuple([slice(x.start, x.stop, x.step) for x in self._roi_ordered])
-        arr_in = dc_in.array.reshape(self._shape_in)
-        dc_out.fill(np.squeeze(arr_in[slice_obj]))
+
+        slice_obj = []
+        for label in dc_in.dimension_labels:
+            index = self._labels_in.index(label)
+            slice_obj.append(slice(self._roi_ordered[index].start, self._roi_ordered[index].stop, self._roi_ordered[index].step))
+
+        dc_out.fill(np.squeeze(dc_in.array[tuple(slice_obj)]))
+
 
     def process(self, out=None):
         """
