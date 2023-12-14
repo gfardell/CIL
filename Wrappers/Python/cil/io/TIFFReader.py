@@ -18,7 +18,8 @@
 # CIL Developers, listed at: https://github.com/TomographicImaging/CIL/blob/master/NOTICE.txt
 
 from cil.framework import AcquisitionData, AcquisitionGeometry, ImageGeometry, ImageData, DataContainer
-from .utilities import Tiff_utilities
+from cil.processors import Binner
+from cil.io.utilities import Tiff_utilities
 import os
 import glob
 import re
@@ -26,6 +27,7 @@ import json
 import numpy as np
 import logging
 
+        
 logger = logging.getLogger(__name__)
 
 class TIFFReader(object):
@@ -45,18 +47,10 @@ class TIFFReader(object):
     dtype : numpy.dtype, default np.float32
         The data type returned with 'read'
 
-
-    deprecated_kwargs
-    -----------------
-
-    roi : dictionary, default `None`, deprecated
-        This has been deprecated. Use proccessor `Slicer` or `Binner` instead (see examples below).
-
-    mode : str, {'bin', 'slice'}, default 'bin', deprecated
-        This has been deprecated. Use proccessor `Slicer` or `Binner` instead (see examples below).
-        
-    transpose : tuple, default `None`, deprecated
-        This has been deprecated. Please define your geometry accordingly. 
+    rescale : bool, tuple, default False
+        If False, the data will be returned as is.
+        If a tuple (scale, offset) is provided, the data will be rescaled as `rescaled_data = (read_data - offset)/scale`
+        If True, the data will be rescaled by the offset and scale found in the accompanying json file. This is a curtosy method that will onyl work if the data was saved with TIFFWriter.
 
         
     Example
@@ -68,15 +62,6 @@ class TIFFReader(object):
     >>> reader.get_image_list()
     ['/path/to/folder/0001.tif', '/path/to/folder/0002.tif', '/path/to/folder/0003.tif', ...]
     >>> data = reader.read()
-
-    
-    To read as subset of you data use this reader with the processor `Slicer` as follows:
-
-    >>> reader = TIFFStackReader(file_name = '/path/to/folder', dimension_labels=('angles','vertical','horizontal')
-    >>> roi = {'angles':(None,None,10), 'vertical':(100), 'horizontal':(50,-50)}
-    >>> slicer = Slicer(roi)
-    >>> slicer.set_input(reader)
-    >>> data = slicer.get_output()
 
         
     To return an ImageData, use the following code:
@@ -113,92 +98,20 @@ class TIFFReader(object):
     """
 
 
-    class data(object):
-        
-        """
-        spoof array in reader
-        """
-        def __init__(self, shape, dtype, read_function):
-            self._shape = shape
-            self._dtype = dtype
-            self._read_slice = read_function
-
-        @property
-        def ndim(self):
-            return 3 if self.shape[0] > 1 else 2
-        
-        @property
-        def shape(self):
-            return self._shape
-        
-        @property
-        def dtype(self):
-            return self._dtype
-        
-        @property
-        def size(self):
-            return np.prod(self.shape)
-        
-        
-        def __getitem__(self, key):
-
-            if isinstance(key, tuple):
-                len_key = len(key)
-
-                list_slices = [item if isinstance(item, slice) else slice(item, item+1) for item in key]
-
-                if len_key == 2 and self.ndim == 2:
-                    return self._read_slice(images_slice=None, height_slice=list_slices[0], width_slice=list_slices[1])
-                elif len_key == 3 and self.ndim == 3:
-                    return self._read_slice(images_slice=list_slices[0], height_slice=list_slices[1], width_slice=list_slices[2])
-                else:
-                    raise ValueError("Expected a tuple of ndim slices or ints, expected length {} got length {}".format(self.ndim, len_key))
-                
-            else:
-                raise ValueError("Expected a tuple of ndim slices or ints, got key as {}".format(type(key)))
-            
-            
-    def _deprecated_kwargs(self, deprecated_kwargs):
-        """
-        Handle deprecated keyword arguments for backward compatibility.
-
-        Parameters
-        ----------
-        deprecated_kwargs : dict
-            Dictionary of deprecated keyword arguments.
-
-        Notes
-        -----
-        This method is called by the __init__ method.
-        """
-
-        if deprecated_kwargs.get('mode', False):
-            raise ValueError("Input argument `mode` has been deprecated. Please use processors 'Binner' or 'Slicer' instead")
-
-        if deprecated_kwargs.get('roi', False):
-           raise ValueError("Input argument `roi` has been deprecated. Please use processors 'Binner' or 'Slicer' instead")
-
-        if deprecated_kwargs.pop('transpose', None) is not None:
-            raise ValueError("Input argument `transpose` has been deprecated. Please define your geometry accordingly")
-
-        if deprecated_kwargs:
-            logging.warning("Additional keyword arguments passed but not used: {}".format(deprecated_kwargs))
-
-
-    def __init__(self, file_name, dimension_labels, dtype=np.float32, **deprecated_kwargs):
+    def __init__(self, file_name, dimension_labels, dtype=np.float32, rescale=False, **deprecated_kwargs):
 
         if (Tiff_utilities.pilAvailable == False):
             raise Exception("PIL (pillow) is not available, cannot load TIFF files.")
 
-        self.set_up(file_name = file_name, dimension_labels=dimension_labels, dtype=dtype,
+        self.set_up(file_name = file_name, dimension_labels=dimension_labels, dtype=dtype, rescale=rescale,
                      **deprecated_kwargs)
 
 
     def set_up(self,
                file_name,
                dimension_labels,
-               dtype=np.float32,
-               **deprecated_kwargs):
+               rescale,
+               dtype=np.float32):
         """
         Reconfigures the TIFFReader object.
 
@@ -214,9 +127,12 @@ class TIFFReader(object):
         dtype : numpy.dtype, default np.float32
             The data type returned with 'read'
 
-        """
+        rescale : bool, tuple, default False
+            If False, the data will be returned as is.
+            If a tuple (scale, offset) is provided, the data will be rescaled as `rescaled_data = (read_data - offset)/scale`
+            If True, the data will be rescaled by the offset and scale found in the accompanying json file. This is a curtosy method that will onyl work if the data was saved with TIFFWriter.
 
-        self._deprecated_kwargs(deprecated_kwargs)
+        """
 
         # find all tiff files
         sorted = False
@@ -253,45 +169,54 @@ class TIFFReader(object):
         image_param_in = Tiff_utilities.get_dataset_metadata(self._tiff_files[0])
         num_images = len(self._tiff_files)
 
-        dtype = image_param_in['dtype'] if dtype is None else dtype
-        shape = [num_images, image_param_in['height'], image_param_in['width']]
+        self._dtype = image_param_in['dtype'] if dtype is None else dtype
+        self._shape = [num_images, image_param_in['height'], image_param_in['width']]
 
-        self._dimension_labels = dimension_labels 
-        self._array = self.data(shape, dtype, self._read_slice)
-
-
-    @property
-    def array(self):
-        """Returns the array-like object of the TIFF file(s) being read. Elements can be accessed via numpy advanced indexing. Slicing order is defined by the dimension labels"""
-
-        return self._array
-        
+        if self._shape[0] >1:
+            if len(dimension_labels) == 3:
+                self._dimension_labels_full = dimension_labels
+            else:
+                raise ValueError("dimension_labels must be a tuple of length 3 as reading in multiple Tiffs. Got {}".format(len(dimension_labels)))
+        else:
+            if len(dimension_labels) == 2:
+                self._dimension_labels_full = ['None',*dimension_labels]
+            elif len(dimension_labels) == 3:
+                self._dimension_labels_full = dimension_labels
+                logging.WARNING("dimension_labels is a tuple of length 3 but only 1 Tiff file was found. The first dimension will be set to 'None'")
+            else:
+                raise ValueError("dimension_labels must be a tuple of length 2. Got {}".format(len(dimension_labels)))
     
-    @property
-    def ndim(self):
-        """Returns the number of dimensions of the TIFF file(s) being read."""
+        # set up scaling
+        if rescale is False:
+            self._rescale = False
+        else:
+            self._rescale = True
 
-        return self.array.ndim
-    
+            if rescale is True:
+                scale, offset = self.read_scale_offset()
+            else:
+                scale, offset = rescale
+
+            self._rescale_values = (1.0/scale, -offset/scale)
+
     @property
     def shape(self):
         """Returns the shape of the TIFF file(s) being read."""
-
-        return self.array.shape
-
-    @property
-    def dtype(self):
-        """Returns the data type of the TIFF file(s) being read."""
-
-        return self.array.dtype
-    
+        return self._shape
+        
     @property
     def dimension_labels(self):
         """Returns the dimension labels of the TIFF file(s) being read."""
-
-        return self._dimension_labels
+        if self._shape[0] > 1:
+            return self._dimension_labels_full
+        else:
+            return self._dimension_labels_full[1::]
     
-
+    @property
+    def dtype(self):
+        """Returns the data type of the TIFF file(s) being read."""
+        return self._dtype
+  
     def get_image_list(self):
         """
         Returns an ordered list of TIFF files that have been found by the reader.
@@ -315,23 +240,140 @@ class TIFFReader(object):
         array_full = np.empty(self.shape, dtype=self.dtype)
         image_shape_PIL = (self.shape[2], self.shape[1])
 
-        for i in range(self.shape[0]):
-            Tiff_utilities.read_to(self._tiff_files[i], array_full, image_shape_PIL, np.s_[i,:,:])
     
-        array_full = np.squeeze(array_full)
+        for i in range(self.shape[0]):
+
+            Tiff_utilities.read_to(self._tiff_files[i], array_full, image_shape_PIL, np.s_[i,:,:])
+
+            if self._rescale:
+                array_full[np.s_[i,:,:]] *= self._rescale_values[0]
+                array_full[np.s_[i,:,:]] += self._rescale_values[1]
+
+        array_full = array_full.squeeze()
         return DataContainer(array_full, dimension_labels=self.dimension_labels)
+    
 
 
-
-    def _read_slice(self, images_slice=None, height_slice=None, width_slice=None):
+    def read_binned(self, images_roi=None, height_roi=None, width_roi=None):
         """
-        Reads the ROI of an image and returns as a numpy array. This is used by `array.__getitem__` to allow numpy advanced indexing.
-        The dtype is configured by the reader.
+    
+        Reads the ROI of an image and returns as a `DataContainer`. The dtype is configured by the reader.
+
+        step defines number of pixels to average together.
 
         Parameters
         ----------
-        images_slice : slice, default None
-            Slice defining images to be read. If None, all images are read. This will be applied to the list retrieved with `get_image_list`
+        images_roi : tuple, default None
+            Tuple (start, stop, step) defining images to be read. If None, all images are read. This will be applied to the list retrieved with `get_image_list`
+        height_roi : tuple, default None
+            Tuple (start, stop, step) defining ROI of image height. Applied to all images.
+        width_roi : tuple, default None
+            Tuple (start, stop, step) defining ROI of image width. Applied to all images.
+
+        Returns
+        -------
+        DataContainer: The read data
+
+        """
+
+        shape_out = self.shape.copy()
+        shape_PIL_image = [*shape_out[1::]]
+
+        crop_box = [0, 0, self.shape[2], self.shape[1]]
+        dimension_labels_keep = [1]*len(self._dimension_labels_full)
+        
+        roi = {}
+        if images_roi is not None:
+            if self.shape[0] > 1:
+                axis_range = range(shape_out[0])[images_roi]
+                N_images = axis_range.step
+
+                length = (axis_range.stop - axis_range.start) // axis_range.step
+                start = axis_range.start
+
+                roi[self.dimension_labels[0]] = (0, axis_range.step, axis_range.step)
+                shape_out[0] = length
+
+                images_range = range(axis_range.start, start + length * axis_range.step, axis_range.step)
+
+            else:
+                images_range = range(1)
+                N_images = 1
+        else:
+            images_range = range(self.shape[0])
+            N_images = 1
+
+        if len(images_range) <= 1:
+            dimension_labels_keep[-3] = 0
+
+
+        if height_roi is not None:
+            axis_range = range(shape_out[1])[height_roi]
+            length = (axis_range.stop - axis_range.start) // axis_range.step
+
+            roi[self.dimension_labels[-2]] = (0, length * axis_range.step, axis_range.step)
+            shape_out[-2] = length
+            crop_box[1] = axis_range.start
+            crop_box[3] = axis_range.start + length * axis_range.step
+            shape_PIL_image[1] = length * axis_range.step
+
+            if length < 2:
+                dimension_labels_keep[-2] = 0
+
+
+        if width_roi is not None:        
+            axis_range = range(shape_out[2])[width_roi]
+            length = (axis_range.stop - axis_range.start) // axis_range.step
+
+            roi[self.dimension_labels[-1]] = (0, length * axis_range.step, axis_range.step)
+            shape_out[-1] = length
+            crop_box[0] = axis_range.start
+            crop_box[2] = axis_range.start + length * axis_range.step
+            shape_PIL_image[0] = length * axis_range.step
+
+            if length < 2:
+                dimension_labels_keep[-1] = 0
+
+
+        # create empty data container for the array
+        array_full = np.empty(shape_out, dtype=self.dtype)
+
+        binner = Binner(roi, accelerated=False)
+        arr_unbinned = np.empty((N_images, shape_PIL_image[1], shape_PIL_image[0]), dtype=self.dtype)
+
+        image_unbinned = DataContainer(arr_unbinned, False, dimension_labels=self._dimension_labels_full)
+
+        binner.set_input(image_unbinned)
+
+
+        count = 0
+        for i in images_range:
+            for j in range(images_range.step):
+                Tiff_utilities.read_to(self._tiff_files[i+j], arr_unbinned, shape_PIL_image, np.s_[j,:,:], crop_box)
+
+            array_full[count] = binner.get_output().array
+            count+=1
+
+        array_full = array_full.squeeze()
+
+
+        dimension_labels_out = [self._dimension_labels_full[i] for i, x in enumerate(dimension_labels_keep) if x == 1]
+        data =  DataContainer(array_full, False, dimension_labels=dimension_labels_out)
+        
+        if self._rescale:
+            return self._rescale_data(data)
+    
+        return data
+
+
+    def read_sliced(self, images_slice=None, height_slice=None, width_slice=None):
+        """
+        Reads the ROI of an image and returns as a `DataContainer`. The dtype is configured by the reader.
+
+        Parameters
+        ----------
+        images_slice : slice, list, default None
+            Slice or list defining images to be read. If None, all images are read. This will be applied to the list retrieved with `get_image_list`
         height_slice : slice, default None
             Slice defining ROI of image height. Applied to all images.
         width_slice : slice, default None
@@ -339,16 +381,29 @@ class TIFFReader(object):
 
         Returns
         -------
-        numpy narray: The read data
+        DataContainer: The read data
 
         """
 
         shape_out = self.shape.copy()
         crop_box = [0, 0, self.shape[2], self.shape[1]]
+        dimension_labels_keep = [1]*len(self.dimension_labels)
 
-        if images_slice is not None:
-            axis_range_images = range(shape_out[0])[images_slice]
+
+        if images_slice is not None and  self.shape[0] > 1:
+            if isinstance(images_slice,list):
+                axis_range_images = images_slice
+            elif isinstance(images_slice,slice):
+                axis_range_images = range(shape_out[0])[images_slice]
+            else:
+                raise TypeError("Unsupported type for images_slice. Expected list or slice, got {}"\
+                    .format(type(images_slice)))
+            
             shape_out[0] = len(axis_range_images)
+
+            if len(axis_range_images) < 2:
+                dimension_labels_keep[-3] = 0
+            
         else:
             axis_range_images = range(shape_out[0])
 
@@ -357,13 +412,16 @@ class TIFFReader(object):
             shape_out[1] = len(axis_range)
             crop_box[1] = axis_range.start
             crop_box[3] = axis_range.start + axis_range.step * (shape_out[1]-1) +1
+            if len(axis_range) < 2:
+                dimension_labels_keep[-2] = 0
 
         if width_slice is not None:
             axis_range = range(shape_out[2])[width_slice]
             shape_out[2] = len(axis_range)
             crop_box[0] = axis_range.start
             crop_box[2] = axis_range.start + axis_range.step * (shape_out[2]-1) +1
-
+            if len(axis_range) < 2:
+                dimension_labels_keep[-1] = 0
 
         # PIL specific set up
         shape_PIL_image = (shape_out[2], shape_out[1])
@@ -376,8 +434,14 @@ class TIFFReader(object):
             Tiff_utilities.read_to(self._tiff_files[i], array_full, shape_PIL_image, np.s_[ind_out,:,:], crop_box)
             ind_out +=1
 
-        return np.squeeze(array_full)
+        array_full = array_full.squeeze()
+        dimension_labels_out = [self.dimension_labels[i] for i, x in enumerate(dimension_labels_keep) if x == 1]
+        data =  DataContainer(array_full, False, dimension_labels=dimension_labels_out)
         
+        if self._rescale:
+            return self._rescale_data(data)
+    
+        return data
 
     def __atoi(self, text):
         return int(text) if text.isdigit() else text
@@ -466,27 +530,17 @@ class TIFFReader(object):
         return (d['scale'], d['offset'])
 
 
-    def read_rescaled(self, scale=None, offset=None):
-        '''Reads the TIFF stack and rescales it with the provided scale and offset, or with the ones in the json file if not provided
+    def _rescale_data(self, data):
+        """
+        Rescales the data by the offset and scale requested by the user as `rescaled_data = (read_data - offset)/scale`
         
-        This is a courtesy method that will work only if the tiff stack is saved with the TIFFWriter
-
         Parameters:
         -----------
+        data: DataContainer
+            The data to be rescaled  
+        """
 
-        scale: float, default None
-            scale to apply to the data. If None, the scale will be read from the json file saved by TIFFWriter.
-        offset: float, default None
-            offset to apply to the data. If None, the offset will be read from the json file saved by TIFFWriter.
+        data.multiply(self._rescale_values[0], out=data)
+        data.add(self._rescale_values[1], out=data)
 
-        Returns:
-        --------
-
-        numpy.ndarray in float32
-        '''
-        data = self.read(dtype=np.float32)
-        if scale is None or offset is None:
-            scale, offset = self.read_scale_offset()
-        data -= offset
-        data /= scale
         return data
