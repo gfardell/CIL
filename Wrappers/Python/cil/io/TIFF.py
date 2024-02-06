@@ -37,19 +37,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def save_scale_offset(fname, scale, offset):
-    '''Save scale and offset to file
-    
-    Parameters
-    ----------
-    fname : string
-    scale : float
-    offset : float
-    '''
-    dirname = os.path.dirname(fname)
-    txt = os.path.join(dirname, 'scaleoffset.json')
-    d = {'scale': scale, 'offset': offset}
-    utilities.save_dict_to_file(txt, d)
+
 
 class TIFFWriter(object):
     '''Write a DataSet to disk as a TIFF file or stack of TIFF files
@@ -177,7 +165,7 @@ class TIFFWriter(object):
         else:
             raise ValueError('Cannot handle more than 4 dimensions')
         if self.compress:
-            save_scale_offset(fname, self.scale, self.offset)
+            utilities.save_scale_offset(fname, self.scale, self.offset)
     
     def _zero_padding(self, number):
         i = 0
@@ -562,22 +550,6 @@ class TIFFStackReader(object):
         '''
         return self._read_as(acquisition_geometry)
     
-    def read_scale_offset(self):
-        '''Reads the scale and offset from a json file in the same folder as the tiff stack
-        
-        This is a courtesy method that will work only if the tiff stack is saved with the TIFFWriter
-
-        Returns:
-        --------
-
-        tuple: (scale, offset)
-        '''
-        # load first image to find out dimensions and type
-        path = os.path.dirname(self._tiff_files[0])
-        with open(os.path.join(path, "scaleoffset.json"), 'r') as f:
-            d = json.load(f)
-
-        return (d['scale'], d['offset'])
 
     def read_rescaled(self, scale=None, offset=None):
         '''Reads the TIFF stack and rescales it with the provided scale and offset, or with the ones in the json file if not provided
@@ -599,7 +571,7 @@ class TIFFStackReader(object):
         '''
         data = self.read()
         if scale is None or offset is None:
-            scale, offset = self.read_scale_offset()
+            scale, offset = utilities.read_scale_offset(os.path.dirname(self._tiff_files[0]))
         if self.dtype != np.float32:
             data = data.astype(np.float32)
         data -= offset

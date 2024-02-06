@@ -96,9 +96,17 @@ class Binner(Slicer):
             raise RuntimeError("Cannot run accelerated Binner without the IPP libraries.")
 
         super(Binner,self).__init__(roi = roi)
-        self._accelerated = True
+        self._accelerated = accelerated
 
+    def check_input(self, data):
+        if self._data_array:
+            if data.dtype != np.float32 and self._accelerated == True:
+                raise TypeError("Accelerated backend for float32 data only. Got {0}".format(data.dtype))
 
+        super(Binner, self).check_input(data)
+
+        return True 
+    
     def _configure(self):
         """
         Once the ROI has been parsed this configures the input specifically for use with Binner        

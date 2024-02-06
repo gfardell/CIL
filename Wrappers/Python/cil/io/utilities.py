@@ -21,7 +21,15 @@ import numpy as np
 import json
 import logging
 import h5py
-
+import os
+import glob
+import re
+import aiofiles
+import asyncio
+import nest_asyncio # needed for running with ipython
+from dask import array as da
+import tifffile
+from libtiff import TIFF
 
 def get_compress(compression=None):
     '''Returns whether the data needs to be compressed and to which numpy type
@@ -158,6 +166,44 @@ def compress_data(data, scale, offset, dtype):
         tmp = tmp.astype(dtype)
     return tmp
 
+
+def save_scale_offset(fname, scale, offset):
+    '''Save scale and offset to file
+    
+    Parameters
+    ----------
+    fname : string
+    scale : float
+    offset : float
+    '''
+    if os.path.isdir(fname):
+        dirname = fname
+    else:
+        dirname = os.path.dirname(fname)
+        
+    txt = os.path.join(dirname, 'scaleoffset.json')
+    d = {'scale': scale, 'offset': offset}
+    save_dict_to_file(txt, d)
+
+def read_scale_offset(file_path):
+    """
+    Reads the scale and offset from a json file named "scaleoffset.json". This file is created by the TIFFwriter.
+
+    Returns:
+    --------
+    tuple:
+        (scale, offset)
+    """
+    try:
+        with open(os.path.join(file_path, "scaleoffset.json"), 'r') as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError("No json file was found.")
+    except:
+        raise ValueError("Error reading json file.")
+    
+    return (d['scale'], d['offset'])
+    
 
 class HDF5_utilities(object): 
 
@@ -339,6 +385,81 @@ class Tiff_utilities(object):
     """
 
     @staticmethod
+    def _atoi(text):
+        return int(text) if text.isdigit() else text
+    
+    @staticmethod
+    def _natural_keys(text):
+        """
+        https://stackoverflow.com/questions/5967500/how-to-correctly-sort-a-string-with-a-number-inside
+        alist.sort(key=natural_keys) sorts in human order
+        http://nedbatchelder.com/blog/200712/human_sorting.html
+        (See Toothy's implementation in the comments)
+        """
+        return [Tiff_utilities._atoi(c) for c in re.split(r'(\d+)', text) ]
+    
+    @staticmethod
+    def get_tiff_paths(file_or_directory):
+        """   
+        Returns a list containing the absolute paths to TIFF files. Checks are performed to ensure the files exist.
+
+        Parameters
+        ----------
+        file_or_directory: str
+            The full path to a single TIFF file, a list of paths to TIFF files, or a directory containing TIFF files.
+
+        Notes
+        -----
+        If a directory is provided, all TIFF files in the directory will be returned sorted by file name.
+
+        If a partial file name is provided in the form "path/to/file_name/projection_" all TIFF files in the directory matching the partial file name 
+        will be returned sorted by file name.
+
+        Returns
+        -------
+        list
+            A list of TIFF files matching the input file_or_directory. 
+        """
+
+        if isinstance(file_or_directory, list):
+            tiff_files = file_or_directory
+        elif os.path.isfile(file_or_directory):
+            tiff_files = [file_or_directory]
+        else:
+            # split file name in to path and partial file name
+            if os.path.isdir(file_or_directory):
+                path = file_or_directory
+                partial_file_name = ""
+            else:
+                try:
+                    path, partial_file_name = os.path.split(file_or_directory)
+                except:
+                    raise ValueError("file_name expects a tiff file, a list of tiffs, or a directory containing tiffs. Got {}".format(file_or_directory))
+                
+            # find all tiff files in the directory that match the partial file name
+            fn_format = os.path.join(glob.escape(path),"{}*.tif*".format(partial_file_name))
+            tiff_files = glob.glob(fn_format)
+
+            if not tiff_files:
+                raise FileNotFoundError("No TIFF files were found in matching path: {}".format(fn_format))
+            
+            tiff_files.sort(key=Tiff_utilities._natural_keys)
+
+        # check all matched file paths are valid
+        for i, fn in enumerate(tiff_files):
+            if '.tif' in fn:
+                if not(os.path.exists(fn)):
+                    raise FileNotFoundError('File \n {}\n does not exist.'.format(fn))
+                tiff_files[i] = os.path.abspath(fn)
+            else:
+                raise ValueError("file_name expects a tiff file, a list of tiffs, or a directory containing tiffs. Got {}".format(tiff_files))
+            
+        return tiff_files
+    
+
+
+
+    @staticmethod
     def get_dataset_metadata(filename):
         """
         Returns the dataset metadata as a dictionary
@@ -385,7 +506,7 @@ class Tiff_utilities(object):
     
 
     @staticmethod
-    def read(filename, shape_out, crop_roi=None, dtype=np.float32):
+    def read(filename, crop_roi=None, dtype=np.float32):
         """
         Reads a tiff image and returns a numpy array with the requested data
 
@@ -395,8 +516,6 @@ class Tiff_utilities(object):
             The full path to the file
         crop_roi: list of pixels defining the cropped ROI, optional
             Left, Top, Right, Bottom
-        shape_out: tuple, optional
-            must be provided if downsampling (i.e. `slice` or `crop`)
         dtype: numpy type, default np.float32
             the numpy data type for the returned array
     
@@ -409,14 +528,14 @@ class Tiff_utilities(object):
 
         with Tiff_utilities.Image.open(filename, mode='r', formats=(['tiff'])) as f:
 
-            f = f.resize(shape_out, Tiff_utilities.Image.NEAREST, crop_roi)
+            f = f.crop(crop_roi)
             arr = np.asarray(f, dtype=dtype, order='C')
 
         return arr 
 
 
     @staticmethod
-    def read_to(filename, out, shape_out, dest_sel, crop_roi=None):
+    def read_to(filename, out, dest_sel=None, crop_roi=None):
         """
         Reads a tiff image and fills a numpy array at the requested slice with the requested data. If shape out is provided it will downsample the image.
 
@@ -430,8 +549,6 @@ class Tiff_utilities(object):
             The selection of slices in each destination dimension to fill
         crop_roi: list of pixels defining the cropped ROI, optional
             Left, Top, Right, Bottom
-        shape_out: tuple, optional
-            must be provided if downsampling (i.e. `slice` or `crop`) 
 
         Returns
         -------
@@ -441,7 +558,36 @@ class Tiff_utilities(object):
         """
 
         with Tiff_utilities.Image.open(filename, mode='r', formats=(['tiff'])) as f:
+            f = f.crop(crop_roi)
+            np.copyto(out[dest_sel], f)
 
-            f = f.resize(shape_out, Tiff_utilities.Image.NEAREST, crop_roi)
-            out[dest_sel] = np.asarray(f, dtype=out.dtype, order='C')
+
+    @staticmethod
+    async def _read_and_process_tiff(path,array_full, pos):
+
+        async with aiofiles.open(path, mode='rb') as f:
+            data = await f.read()
+
+        b = Tiff_utilities.Image.io.BytesIO(data)
+        image_pil = Tiff_utilities.Image.open(b, mode='r')
+        np.copyto(array_full[pos], image_pil)
+
+        # image_np = np.asarray(image_pil, dtype=np.float32, order='C')
+        # image_np/=65535.0
+        # image_np = -np.log(image_np)
+        # array_full[pos] = image_np
+
+    @staticmethod
+    async def _read_all_tiffs_async(file_list, array_full):
+
+        tasks = [Tiff_utilities._read_and_process_tiff(file_list[i], array_full, np.s_[i,:,:]) for i in range(len(file_list))]
+        results = await asyncio.gather(*tasks)
+        return results
+
+    @staticmethod
+    def read_to_all_async(file_list, out):
+        nest_asyncio.apply()
+        asyncio.run(Tiff_utilities._read_all_tiffs_async(file_list, out))
+
+
 

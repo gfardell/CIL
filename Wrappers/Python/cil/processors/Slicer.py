@@ -140,10 +140,6 @@ class Slicer(DataProcessor):
         if isinstance(data, (ImageGeometry, AcquisitionGeometry)):
             self._geometry = data
 
-        if self._data_array:
-            if data.dtype != np.float32:
-                raise TypeError("Expected float32")
-
         if (self._roi_input == None):
             raise ValueError('Please, specify roi')
 
@@ -410,13 +406,13 @@ class Slicer(DataProcessor):
             if new_geometry is not None:
                 data_out = new_geometry.allocate(None)
             else:
-                processed_array = np.empty(self.shape_out,dtype=np.float32)
+                processed_array = np.empty(self.shape_out,dtype=data.dtype)
                 data_out = DataContainer(processed_array,False, self.labels_out)
         else:
             try:
-                out.array = np.asarray(out.array, dtype=np.float32, order='C').reshape(self.shape_out)
+                out.array = np.asarray(out.array, dtype=data.dtype, order='C').reshape(self.shape_out)
             except:
-                raise ValueError("Array of `out` not compatible. Expected shape: {0}, data type: {1} Got shape: {2}, data type: {3}".format(self.shape_out, np.float32, out.array.shape, out.array.dtype))
+                raise ValueError("Array of `out` not compatible. Expected shape: {0}, data type: {1} Got shape: {2}, data type: {3}".format(self.shape_out, data.dtype, out.array.shape, out.array.dtype))
 
             if new_geometry is not None:
                 if out.geometry != new_geometry:
