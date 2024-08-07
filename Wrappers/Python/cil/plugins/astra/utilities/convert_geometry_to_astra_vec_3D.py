@@ -56,12 +56,16 @@ def convert_geometry_to_astra_vec_3D(volume_geometry, sinogram_geometry_in):
     #get units
     degrees = angles.angle_unit == sinogram_geometry.DEGREE
 
-    if sinogram_geometry.dimension == '2D':
-        #create a 3D astra geom from 2D CIL geometry
-        volume_geometry_temp = volume_geometry.copy()
+    # needs cubic voxels
+    volume_geometry_temp = volume_geometry.copy()
+    if volume_geometry_temp.voxel_num_z == 0:
         volume_geometry_temp.voxel_num_z = 1
-
         volume_geometry_temp.voxel_size_z = volume_geometry_temp.voxel_size_x
+
+    if volume_geometry_temp.voxel_size_z != volume_geometry_temp.voxel_size_x:
+        raise ValueError(f'ASTRA backend only supports cubic voxels. Got voxel size x: {volume_geometry_temp.voxel_size_x}, y: {volume_geometry_temp.voxel_size_y}, z: {volume_geometry_temp.voxel_size_z}')
+        
+    if sinogram_geometry.dimension == '2D':
         panel.pixel_size[1] =  volume_geometry_temp.voxel_size_z * sinogram_geometry.magnification
 
         row = np.zeros((3,1))
@@ -89,8 +93,6 @@ def convert_geometry_to_astra_vec_3D(volume_geometry, sinogram_geometry_in):
             projector = 'cone_vec'
 
     else:
-        volume_geometry_temp = volume_geometry.copy()
-
         row = panel.pixel_size[0] * system.detector.direction_x.reshape(3,1)
         col = panel.pixel_size[1] * system.detector.direction_y.reshape(3,1)
         det = system.detector.position.reshape(3, 1)

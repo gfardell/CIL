@@ -17,14 +17,16 @@
 # CIL Developers, listed at: https://github.com/TomographicImaging/CIL/blob/master/NOTICE.txt
 
 from cil.framework import Processor, AcquisitionData, DataOrder
+from .Binner import Binner
+from .Slicer import Slicer
+
 import matplotlib.pyplot as plt
 import scipy
 import numpy as np
-import inspect
 import logging
 import math
 import importlib
-import warnings
+
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +94,8 @@ class CofR_image_sharpness(Processor):
                     'backend' : backend,
                     'tolerance': tolerance,
                     'search_range': search_range,
-                    'initial_binning': initial_binning
+                    'initial_binning': initial_binning,
+                    '_validated_indices' : []
                  }
 
         super(CofR_image_sharpness, self).__init__(**kwargs)
@@ -104,31 +107,33 @@ class CofR_image_sharpness(Processor):
         if data.geometry == None:
             raise Exception('Geometry is not defined.')
 
-        if data.geometry.geom_type == 'cone' and self.slice_index != 'centre':
-            raise ValueError("Only the centre slice is supported with this algorithm")
-
-        if data.geometry.system_description not in ['simple','offset']:
-            raise NotImplementedError("Not implemented for rotated system geometries")
+        if data.geometry.system_description not in ['simple','offset','advanced']:
+            raise NotImplementedError("Geometry not supported")
 
         if data.geometry.channels > 1:
             raise ValueError("Only single channel data is supported with this algorithm")
 
-        if self.slice_index != 'centre':
-            try:
-                int(self.slice_index)
-            except:
-                raise ValueError("slice_index expected to be a positive integer or the string 'centre'. Got {0}".format(self.slice_index))
+        if self.slice_index == 'centre' or isinstance(self.slice_index, int):
+            self.slice_index = [self.slice_index]
 
-            if self.slice_index < 0 or self.slice_index >= data.get_dimension_size('vertical'):
-                raise ValueError('slice_index is out of range. Must be in range 0-{0}. Got {1}'.format(data.get_dimension_size('vertical'), self.slice_index))
+        if isinstance(self.slice_index, (list, tuple)) and len(self.slice_index) <= 2:
+            
+            # Validate each slice index
+            for index in self.slice_index:
+                if self.slice_index != 'centre':
+                    try:
+                        index = int(index)
+                    except:
+                        raise ValueError(f"slice_index expected to be a positive integer or the string 'centre'. Got {index}")
 
-        #check order for single slice data
-        if data.geometry.dimension == '3D':
-            test_geom = data.geometry.get_slice(vertical='centre')
+                    if index >= 0 and index < data.get_dimension_size('vertical'):
+                        self._validated_indices.append(index)
+                    else:
+                        raise ValueError(f"slice_index is out of range. Must be in range 0-{data.get_dimension_size('vertical')}. Got {index}")
         else:
-            test_geom = data.geometry
+            raise ValueError("self.slice_index must be a list or tuple of length 2, an integer, or the string 'centre'")
 
-        if not DataOrder.check_order_for_engine(self.backend, test_geom):
+        if not DataOrder.check_order_for_engine(self.backend, data.geometry):
             raise ValueError("Input data must be reordered for use with selected backend. Use input.reorder{'{0}')".format(self.backend))
 
         return True
@@ -227,8 +232,9 @@ class CofR_image_sharpness(Processor):
 
     def calculate(self, data, ig, offset):
         ag_shift = data.geometry.copy()
-        ag_shift.config.system.rotation_axis.position = [offset, 0]
-
+        shift = [0]*data.ndim
+        shift[0] = offset
+        ag_shift.config.system.rotation_axis.position = shift
         reco = self.FBP(ig, ag_shift)(data)
         return (reco*reco).sum()
 
@@ -256,10 +262,13 @@ class CofR_image_sharpness(Processor):
         #get slice
         data_full = self.get_input()
 
-        if data_full.geometry.dimension == '3D':
-            data = data_full.get_slice(vertical=self.slice_index)
-        else:
+        slice_index = self._validated_indices[0]
+
+        if data_full.geometry.geom_type == 'cone' and slice_index != 'centre':
             data = data_full
+        else:
+            data = data_full.get_slice(vertical=slice_index)
+
 
         data.geometry.config.system.align_reference_frame('cil')
         width = data.geometry.config.panel.num_pixels[0]
@@ -275,43 +284,50 @@ class CofR_image_sharpness(Processor):
         log.debug("search range is %d", self.search_range)
         log.debug("initial binning is %d", self.initial_binning)
 
-        #filter full projections
-        data_filtered = data.copy()
-        data_filtered.fill(scipy.ndimage.sobel(data.as_array(), axis=1, mode='reflect', cval=0.0))
-
+        # sobel filter original data
+        data_filtered = data.geometry.allocate(None)
+        data_filtered.fill(scipy.ndimage.sobel(data.as_array(), axis=-1, mode='reflect', cval=0.0))
+        
         if self.initial_binning > 1:
 
-            #gaussian filter data
-            data_temp = data_filtered.copy()
-            data_temp.fill(scipy.ndimage.gaussian_filter(data_filtered.as_array(), [0,self.initial_binning//2]))
+            #bin data after guassian filtering
+            binner = Binner(roi={'horizontal':(None, None, self.initial_binning)},accelerated=False)
+            binner.set_input(data.geometry)
+            geom_binned = binner.get_output()
+            data_processed = geom_binned.allocate()
 
-            #bin data whilst preserving centres
-            num_pix_new = np.ceil(width/self.initial_binning)
+            filter_kernel = (data.ndim -1)* [1]
+            filter_kernel[-1] = self.initial_binning//2
 
-            new_half_panel = (num_pix_new - 1)/2
-            half_panel = (width - 1)/2
+            #allocate single projection for binning
+            
+            if self.backend=='astra':
+                geom_temp = data.geometry.get_slice(vertical='centre')
+                #astra requires cubic voxels
+                data_processed.geometry.pixel_size_v = geom_temp.pixel_size_v * self.initial_binning
+            else:
+                geom_temp = data.geometry.get_slice(angles=0)
 
-            sampling_points = np.mgrid[-self.initial_binning*new_half_panel:self.initial_binning*new_half_panel+1:self.initial_binning]
-            initial_coordinates = np.mgrid[-half_panel:half_panel+1:1]
-
-            new_geom = data.geometry.copy()
-            new_geom.config.panel.num_pixels[0] = num_pix_new
-            new_geom.config.panel.pixel_size[0] *= self.initial_binning
-            data_binned = new_geom.allocate()
+            proj_single = geom_temp.allocate()
 
             for i in range(data.shape[0]):
-                data_binned.fill(np.interp(sampling_points, initial_coordinates, data.array[i,:]),angle=i)
+                proj_single.fill(scipy.ndimage.gaussian_filter(data.array[i], filter_kernel))
+                binner.set_input(proj_single)
+                proj_binned = binner.get_output()
+                np.copyto(data_processed.array[i],proj_binned.array)
 
-            #filter
-            data_binned_filtered = data_binned.copy()
-            data_binned_filtered.fill(scipy.ndimage.sobel(data_binned.as_array(), axis=1, mode='reflect', cval=0.0))
-            data_processed = data_binned_filtered
+            # sobel filter binned data
+            data_processed.fill(scipy.ndimage.sobel(data_processed.as_array(), axis=-1, mode='reflect', cval=0.0))
         else:
+            # if not binning use full filtered data
             data_processed = data_filtered
 
         ig = data_processed.geometry.get_ImageGeometry()
 
-        #binned grid search
+        if data.geometry.dimension == '3D':
+            ig = Slicer(roi={'vertical':(slice_index, slice_index+1,None)})(ig)
+
+        # coarse grid search
         vox_rad = np.ceil(self.search_range /self.initial_binning)
         steps = int(4*vox_rad + 1)
         offsets = np.linspace(-vox_rad, vox_rad, steps) * ig.voxel_size_x
@@ -330,27 +346,31 @@ class CofR_image_sharpness(Processor):
             centre = self.get_min(offsets, obj_vals, ind)
 
         if self.initial_binning > 8:
-            #binned search continued
+            # if had a lot of binning then do a second coarse search around the minimum
             log.debug("binned search starting at %f", centre)
             a = centre - ig.voxel_size_x *2
             b = centre + ig.voxel_size_x *2
             centre = self.gss(data_processed,ig, (a, b), self.tolerance *ig.voxel_size_x, self.initial_binning )
 
-        #fine search
+        # fine search on unbinned data
         log.debug("fine search starting at %f", centre)
-        data_processed = data_filtered
-        ig = data_processed.geometry.get_ImageGeometry()
+        ig = data_filtered.geometry.get_ImageGeometry()
+
+        if data.geometry.dimension == '3D':
+            ig = Slicer(roi={'vertical':(slice_index, slice_index+1,None)})(ig)
+        
         a = centre - ig.voxel_size_x *2
         b = centre + ig.voxel_size_x *2
-        centre = self.gss(data_processed,ig, (a, b), self.tolerance *ig.voxel_size_x, 1 )
+        centre = self.gss(data_filtered,ig, (a, b), self.tolerance *ig.voxel_size_x, 1 )
 
         new_geometry = data_full.geometry.copy()
-        new_geometry.config.system.rotation_axis.position[0] = centre
+        offset = centre * new_geometry.magnification
+        new_geometry.set_centre_of_rotation(offset=offset, distance_units='default', angle=0.0, angle_units='radian')
 
         log.info("Centre of rotation correction found using image_sharpness")
         log.info("backend FBP/FDK {}".format(self.backend))
-        log.info("Calculated from slice: %s", str(self.slice_index))
-        log.info("Centre of rotation shift = %f pixels", centre/ig.voxel_size_x)
+        log.info("Calculated from slice: %s", str(slice_index))
+        log.info("Centre of rotation offset = %f pixels at the detector", offset/new_geometry.pixel_size_h)
         log.info("Centre of rotation shift = %f units at the object", centre)
         log.info("Return new dataset with centred geometry")
 

@@ -16,11 +16,11 @@
 # Authors:
 # CIL Developers, listed at: https://github.com/TomographicImaging/CIL/blob/master/NOTICE.txt
 
-from cil.processors import Slicer
+from .Slicer import Slicer
 import numpy as np
 
 try:
-    from cil.processors.cilacc_binner import Binner_IPP
+    from .cilacc_binner import Binner_IPP
     has_ipp = True
 except:
     has_ipp = False
