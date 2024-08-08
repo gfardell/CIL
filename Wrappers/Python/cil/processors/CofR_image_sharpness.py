@@ -27,7 +27,6 @@ import logging
 import math
 import importlib
 
-
 log = logging.getLogger(__name__)
 
 class CofR_image_sharpness(Processor):
@@ -120,7 +119,10 @@ class CofR_image_sharpness(Processor):
             
             # Validate each slice index
             for index in self.slice_index:
-                if self.slice_index != 'centre':
+                if index == 'centre':
+                    index = (data.get_dimension_size('vertical')-1) /2
+                    self._validated_indices.append(index)
+                else:
                     try:
                         index = int(index)
                     except:
@@ -257,23 +259,60 @@ class CofR_image_sharpness(Processor):
         return (1.0 - w1) * offsets[ind0] + w1 * offsets[ind0+1]
 
 
+    def _bin_and_filter_data(self, data):
+
+        binner = Binner(roi={'horizontal':(None, None, self.initial_binning)},accelerated=False)
+        binner.set_input(data.geometry)
+        geom_binned = binner.get_output()
+        data_binned = geom_binned.allocate()
+        
+        if self.backend=='astra':
+            geom_temp = data.geometry.get_slice(vertical='centre')
+            #astra requires cubic voxels
+            data_binned.geometry.pixel_size_v = geom_temp.pixel_size_v * self.initial_binning
+        else:
+            geom_temp = data.geometry.get_slice(angle=0)
+
+        proj_single = geom_temp.allocate()
+        filter_kernel = (data_binned.ndim -1)* [1]
+        filter_kernel[-1] = self.initial_binning//2
+
+        for i in range(data.shape[0]):
+            proj_single.fill(scipy.ndimage.gaussian_filter(data.array[i], filter_kernel))
+            binner.set_input(proj_single)
+            proj_binned = binner.get_output()
+            np.copyto(data_binned.array[i],proj_binned.array)
+
+        data_binned.fill(scipy.ndimage.sobel(data_binned.as_array(), axis=-1, mode='reflect', cval=0.0))
+        return data_binned
+
+
+    def _coarse_search(self, ig, data):
+        # coarse grid search
+        vox_rad = np.ceil(self.search_range /self.initial_binning)
+        steps = int(4*vox_rad + 1)
+        offsets = np.linspace(-vox_rad, vox_rad, steps) * ig.voxel_size_x
+        obj_vals = []
+
+        for offset in offsets:
+            obj_vals.append(self.calculate(data, ig, offset))
+
+        if log.isEnabledFor(logging.DEBUG):
+            self.plot(offsets,obj_vals,ig.voxel_size_x / self.initial_binning)
+
+        ind = np.argmin(obj_vals)
+        if ind == 0 or ind == len(obj_vals)-1:
+            raise ValueError ("Unable to minimise function within set search_range")
+       
+        return self.get_min(offsets, obj_vals, ind)
+
     def process(self, out=None):
 
-        #get slice
-        data_full = self.get_input()
+        data_in = self.get_input()
+        data_in.geometry.config.system.align_reference_frame('cil')
+        width = data_in.geometry.config.panel.num_pixels[0]
 
-        slice_index = self._validated_indices[0]
-
-        if data_full.geometry.geom_type == 'cone' and slice_index != 'centre':
-            data = data_full
-        else:
-            data = data_full.get_slice(vertical=slice_index)
-
-
-        data.geometry.config.system.align_reference_frame('cil')
-        width = data.geometry.config.panel.num_pixels[0]
-
-        #initial grid search
+        #initial search setup
         if self.search_range is None:
             self.search_range = width //4
 
@@ -284,97 +323,90 @@ class CofR_image_sharpness(Processor):
         log.debug("search range is %d", self.search_range)
         log.debug("initial binning is %d", self.initial_binning)
 
-        # sobel filter original data
-        data_filtered = data.geometry.allocate(None)
-        data_filtered.fill(scipy.ndimage.sobel(data.as_array(), axis=-1, mode='reflect', cval=0.0))
-        
+        num_slices = len(self._validated_indices)
+        found_offsets = [None] * num_slices
+        use_full_data = False
+        try:
+            # fails if it can't slice the geometry and will default to single slice reconstructions of the full data
+            for slice_index in self._validated_indices:
+                data_filtered_list.append(data_in.get_slice(vertical=slice_index))
+        except:
+            data = data_in.copy()
+            # use the same data for all the slices
+            data_filtered_list = [data]
+            use_full_data = True
+
+        # bin and filter data
         if self.initial_binning > 1:
+            data_binned = [self._bin_and_filter_data(data) for data in data_filtered_list]
 
-            #bin data after guassian filtering
-            binner = Binner(roi={'horizontal':(None, None, self.initial_binning)},accelerated=False)
-            binner.set_input(data.geometry)
-            geom_binned = binner.get_output()
-            data_processed = geom_binned.allocate()
+        # filter unbinned data in place
+        for i, data in enumerate(data_filtered_list):
+            data_filtered_list[i].fill(scipy.ndimage.sobel(data.array, axis=-1, mode='reflect', cval=0.0))
 
-            filter_kernel = (data.ndim -1)* [1]
-            filter_kernel[-1] = self.initial_binning//2
-
-            #allocate single projection for binning
+        # set reference to binned data if exists
+        if self.initial_binning > 1:
+            data_initial = data_binned
+        else:
+            data_initial = data_filtered_list
             
-            if self.backend=='astra':
-                geom_temp = data.geometry.get_slice(vertical='centre')
-                #astra requires cubic voxels
-                data_processed.geometry.pixel_size_v = geom_temp.pixel_size_v * self.initial_binning
+        # coarse search for each slice on
+        for i, slice_index in enumerate(self._validated_indices):
+            log.debug(f"Coarse search for offset in slice {i+1} of {num_slices} on data with binning {self.initial_binning}")
+
+            if len(data_initial) > 1:
+                data = data_initial[i]
             else:
-                geom_temp = data.geometry.get_slice(angles=0)
+                data = data_initial[0]
 
-            proj_single = geom_temp.allocate()
+            ig = data.geometry.get_ImageGeometry()
+            if use_full_data:
+                ig = Slicer(roi={'vertical':(slice_index, slice_index+1,None)})(ig)
 
-            for i in range(data.shape[0]):
-                proj_single.fill(scipy.ndimage.gaussian_filter(data.array[i], filter_kernel))
-                binner.set_input(proj_single)
-                proj_binned = binner.get_output()
-                np.copyto(data_processed.array[i],proj_binned.array)
-
-            # sobel filter binned data
-            data_processed.fill(scipy.ndimage.sobel(data_processed.as_array(), axis=-1, mode='reflect', cval=0.0))
-        else:
-            # if not binning use full filtered data
-            data_processed = data_filtered
-
-        ig = data_processed.geometry.get_ImageGeometry()
-
-        if data.geometry.dimension == '3D':
-            ig = Slicer(roi={'vertical':(slice_index, slice_index+1,None)})(ig)
-
-        # coarse grid search
-        vox_rad = np.ceil(self.search_range /self.initial_binning)
-        steps = int(4*vox_rad + 1)
-        offsets = np.linspace(-vox_rad, vox_rad, steps) * ig.voxel_size_x
-        obj_vals = []
-
-        for offset in offsets:
-            obj_vals.append(self.calculate(data_processed, ig, offset))
-
-        if log.isEnabledFor(logging.DEBUG):
-            self.plot(offsets,obj_vals,ig.voxel_size_x / self.initial_binning)
-
-        ind = np.argmin(obj_vals)
-        if ind == 0 or ind == len(obj_vals)-1:
-            raise ValueError ("Unable to minimise function within set search_range")
-        else:
-            centre = self.get_min(offsets, obj_vals, ind)
-
-        if self.initial_binning > 8:
-            # if had a lot of binning then do a second coarse search around the minimum
-            log.debug("binned search starting at %f", centre)
-            a = centre - ig.voxel_size_x *2
-            b = centre + ig.voxel_size_x *2
-            centre = self.gss(data_processed,ig, (a, b), self.tolerance *ig.voxel_size_x, self.initial_binning )
+            found_offsets[i] = self._coarse_search(ig, data)
+    
+            if self.initial_binning > 8:
+                # if had a lot of binning then do a second coarse search around the minimum
+                log.debug("binned search starting at %f", found_offsets[i])
+                a = found_offsets[i] - ig.voxel_size_x *2
+                b = found_offsets[i] + ig.voxel_size_x *2
+                found_offsets[i] = self.gss(data,ig, (a, b), self.tolerance *ig.voxel_size_x, self.initial_binning )
+    
 
         # fine search on unbinned data
-        log.debug("fine search starting at %f", centre)
-        ig = data_filtered.geometry.get_ImageGeometry()
+        for i, slice_index in enumerate(self._validated_indices):
+            log.debug(f"Fine search for offset in slice {i+1} of {num_slices}")
 
-        if data.geometry.dimension == '3D':
-            ig = Slicer(roi={'vertical':(slice_index, slice_index+1,None)})(ig)
-        
-        a = centre - ig.voxel_size_x *2
-        b = centre + ig.voxel_size_x *2
-        centre = self.gss(data_filtered,ig, (a, b), self.tolerance *ig.voxel_size_x, 1 )
+            if len(data_initial) > 1:
+                data = data_filtered_list[i]
+            else:
+                data = data_filtered_list[0]
 
-        new_geometry = data_full.geometry.copy()
-        offset = centre * new_geometry.magnification
-        new_geometry.set_centre_of_rotation(offset=offset, distance_units='default', angle=0.0, angle_units='radian')
+            ig = data.geometry.get_ImageGeometry()
+            if use_full_data:
+                ig = Slicer(roi={'vertical':(slice_index, slice_index+1,None)})(ig)
 
+            a = found_offsets[i] - ig.voxel_size_x *2
+            b = found_offsets[i] + ig.voxel_size_x *2
+            found_offsets[i] = self.gss(data, ig, (a, b), self.tolerance*ig.voxel_size_x, 1 )
+            log.info(f"Offset in slice {slice_index} = {found_offsets[i]} units")
+    
         log.info("Centre of rotation correction found using image_sharpness")
-        log.info("backend FBP/FDK {}".format(self.backend))
-        log.info("Calculated from slice: %s", str(slice_index))
-        log.info("Centre of rotation offset = %f pixels at the detector", offset/new_geometry.pixel_size_h)
-        log.info("Centre of rotation shift = %f units at the object", centre)
-        log.info("Return new dataset with centred geometry")
+        log.info(f"backend FBP/FDK {self.backend}")
 
         if out is None:
-            return AcquisitionData(array=data_full, deep_copy=True, geometry=new_geometry, supress_warning=True)
+            out = data_in.copy()
+
+        if len(found_offsets) > 1:       
+            x_diff = (found_offsets[1] - found_offsets[0])
+            y_diff = (self._validated_indices[1]-self._validated_indices[0])*(data.geometry.pixel_size_v/data.geometry.magnification)
+            out.geometry.config.system.rotation_axis.direction = [x_diff, 0, y_diff]
+
         else:
-            out.geometry = new_geometry
+            out.geometry.config.system.rotation_axis.position = [found_offsets[0], 0, 0]
+
+            if out.geometry.dimension == '3D':
+                out.geometry.config.system.rotation_axis.direction = [0, 0, 1]
+
+        return out
+
