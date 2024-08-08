@@ -397,9 +397,18 @@ class CofR_image_sharpness(Processor):
         if out is None:
             out = data_in.copy()
 
-        if len(found_offsets) > 1:       
-            x_diff = (found_offsets[1] - found_offsets[0])
-            y_diff = (self._validated_indices[1]-self._validated_indices[0])*(data.geometry.pixel_size_v/data.geometry.magnification)
+        #return found_offsets
+        if len(found_offsets) > 1:
+        
+            slice_pos1 = (self._validated_indices[0]-(data.geometry.pixel_num_v-1)/2) * data.geometry.pixel_size_v / data.geometry.magnification
+            slice_pos2 = (self._validated_indices[1]-(data.geometry.pixel_num_v-1)/2) * data.geometry.pixel_size_v / data.geometry.magnification
+
+            x_diff = found_offsets[1] - found_offsets[0]
+            y_diff = slice_pos2 - slice_pos1
+
+            offset_x_y0 = found_offsets[0] - slice_pos1 * x_diff/y_diff
+
+            out.geometry.config.system.rotation_axis.position = [offset_x_y0, 0, 0]
             out.geometry.config.system.rotation_axis.direction = [x_diff, 0, y_diff]
 
         else:
