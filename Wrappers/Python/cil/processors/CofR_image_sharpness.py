@@ -234,9 +234,7 @@ class CofR_image_sharpness(Processor):
 
     def calculate(self, data, ig, offset):
         ag_shift = data.geometry.copy()
-        shift = [0]*data.ndim
-        shift[0] = offset
-        ag_shift.config.system.rotation_axis.position = shift
+        ag_shift.config.system.rotation_axis.position[0] = offset
         reco = self.FBP(ig, ag_shift)(data)
         return (reco*reco).sum()
 
@@ -287,11 +285,11 @@ class CofR_image_sharpness(Processor):
         return data_binned
 
 
-    def _coarse_search(self, ig, data):
-        # coarse grid search
-        vox_rad = np.ceil(self.search_range /self.initial_binning)
+    def _coarse_search(self, ig, data, initial_offset, search_range_pixel):
+
+        vox_rad = np.ceil(search_range_pixel /self.initial_binning)
         steps = int(4*vox_rad + 1)
-        offsets = np.linspace(-vox_rad, vox_rad, steps) * ig.voxel_size_x
+        offsets = (np.linspace(-vox_rad, vox_rad, steps)) * ig.voxel_size_x + initial_offset
         obj_vals = []
 
         for offset in offsets:
@@ -352,6 +350,16 @@ class CofR_image_sharpness(Processor):
             
         # coarse search for each slice on
         for i, slice_index in enumerate(self._validated_indices):
+
+            if found_offsets[i] is not None:
+                centre_initial = found_offsets[i]
+            elif i > 0:
+                centre_initial = found_offsets[i-1]
+                search_range = self.search_range * 0.5
+            else:
+                centre_initial = 0
+                search_range = self.search_range
+                
             log.debug(f"Coarse search for offset in slice {i+1} of {num_slices} on data with binning {self.initial_binning}")
 
             if len(data_initial) > 1:
@@ -363,7 +371,7 @@ class CofR_image_sharpness(Processor):
             if use_full_data:
                 ig = Slicer(roi={'vertical':(slice_index, slice_index+1,None)})(ig)
 
-            found_offsets[i] = self._coarse_search(ig, data)
+            found_offsets[i] = self._coarse_search(ig, data, centre_initial, search_range)
     
             if self.initial_binning > 8:
                 # if had a lot of binning then do a second coarse search around the minimum
@@ -408,14 +416,13 @@ class CofR_image_sharpness(Processor):
 
             offset_x_y0 = found_offsets[0] - slice_pos1 * x_diff/y_diff
 
-            out.geometry.config.system.rotation_axis.position = [offset_x_y0, 0, 0]
+            out.geometry.config.system.rotation_axis.position[0] = offset_x_y0
+
+            # ToDo: don't overwrite tilt (direction z)
             out.geometry.config.system.rotation_axis.direction = [x_diff, 0, y_diff]
 
         else:
-            out.geometry.config.system.rotation_axis.position = [found_offsets[0], 0, 0]
-
-            if out.geometry.dimension == '3D':
-                out.geometry.config.system.rotation_axis.direction = [0, 0, 1]
+            out.geometry.config.system.rotation_axis.position[0] = found_offsets[0]
 
         return out
 
