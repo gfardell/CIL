@@ -2209,7 +2209,7 @@ class AcquisitionGeometry(object):
         Parameters
         ----------
 
-        labels:  list of strings
+        labels:  list of strings, optional
             The order of the dimensions describing the data.
             For most geometries expects a list containing at least one of the unique labels: 'channel' 'angle' 'vertical' 'horizontal'
             default = ['channel','angle','vertical','horizontal']
