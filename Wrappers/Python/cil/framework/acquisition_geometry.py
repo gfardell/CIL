@@ -2518,10 +2518,9 @@ class AcquisitionGeometry(object):
     def __str__ (self):
         return str(self.config)
 
-
-    def get_slice(self, channel=None, angle=None, vertical=None, horizontal=None, projection=None):
+    def _get_slice_with_angle(self, channel=None, angle=None, vertical=None, horizontal=None):
         '''
-        Returns a new AcquisitionGeometry of a single slice of in the requested direction. Will only return reconstructable geometries.
+        get_slice for geometry with 'angle' dimension label
         '''
         geometry_new = self.copy()
 
@@ -2530,37 +2529,71 @@ class AcquisitionGeometry(object):
             if hasattr(geometry_new.config.channels,'channel_labels'):
                 geometry_new.config.panel.channel_labels = geometry_new.config.panel.channel_labels[channel]
 
+        if angle is not None:
+            geometry_new.config.angles.angle_data = geometry_new.config.angles.angle_data[angle]
 
-        if geometry_new.geom_type & AcquisitionType.CONE_FLEX:
-            if vertical is not None:
-                raise NotImplementedError("Cannot subset Cone3D_Flex geometry by vertical. Expected vertical = None. Got vertical = {0}".format(vertical))
-            if horizontal is not None:
-                raise NotImplementedError("Cannot subset Cone3D_Flex geometry by horizontal. Expected horizontal = None. Got horizontal = {0}".format(horizontal))
-            if projection is not None:
-                geometry_new.config.system.num_positions = 1
-                geometry_new.config.system.source = [self.config.system.source[projection]]
-                geometry_new.config.system.detector = [self.config.system.detector[projection]]
-            if angle is not None:
-                raise ValueError("Angle dimension does not exist for Cone3D_Flex geometry, perhaps you meant to use 'projection'?")
+        if vertical is not None:
+            if AcquisitionType.PARALLEL & geometry_new.geom_type or vertical == 'centre' or abs(geometry_new.pixel_num_v/2 - vertical) < 1e-6:
+                geometry_new = geometry_new.get_centre_slice()
+            else:
+                raise ValueError("Can only subset centre slice geometry on cone-beam data. Expected vertical = 'centre'. Got vertical = {0}".format(vertical))
 
-        else:
- 
-            if angle is not None:
-                geometry_new.config.angles.angle_data = geometry_new.config.angles.angle_data[angle]
+        if horizontal is not None:
+            raise ValueError("Cannot calculate system geometry for a horizontal slice")
 
-            if vertical is not None:
-                if AcquisitionType.PARALLEL & geometry_new.geom_type or vertical == 'centre' or abs(geometry_new.pixel_num_v/2 - vertical) < 1e-6:
-                    geometry_new = geometry_new.get_centre_slice()
-                else:
-                    raise ValueError("Can only subset centre slice geometry on cone-beam data. Expected vertical = 'centre'. Got vertical = {0}".format(vertical))
-
-            if horizontal is not None:
-                raise ValueError("Cannot calculate system geometry for a horizontal slice")
-
-            if projection is not None:
-                raise ValueError("Projecton dimension does not exist for Cone3D_Flex geometry, perhaps you meant to use 'angle'?")
 
         return geometry_new
+
+    def _get_slice_with_projection(self, channel=None, projection=None, vertical=None, horizontal=None):
+        '''
+        get_slice for geometry with 'projection' dimension label
+        ''' 
+
+        geometry_new = self.copy()
+
+        if channel is not None:
+            geometry_new.config.channels.num_channels = 1
+            if hasattr(geometry_new.config.channels,'channel_labels'):
+                geometry_new.config.panel.channel_labels = geometry_new.config.panel.channel_labels[channel]
+        if projection is not None:
+            geometry_new.config.system.num_positions = 1
+            geometry_new.config.system.source = [self.config.system.source[projection]]
+            geometry_new.config.system.detector = [self.config.system.detector[projection]]
+        if vertical is not None:
+            raise NotImplementedError("Cannot subset Cone3D_Flex geometry by vertical. Expected vertical = None. Got vertical = {0}".format(vertical))
+        if horizontal is not None:
+            raise NotImplementedError("Cannot subset Cone3D_Flex geometry by horizontal. Expected horizontal = None. Got horizontal = {0}".format(horizontal))
+
+        return geometry_new
+
+    def get_slice(self, *args, **kwargs):
+        '''
+        Returns a new AcquisitionGeometry of a single slice in the requested direction. Will only return reconstructable geometries.
+
+        Parameters
+        ----------
+        channel: int, optional
+            index on channel dimension to slice on. If None, does not slice on this dimension
+        projection or angle: int, optional
+            index on projection or angle dimension to slice on - `projection` is the dimension label used for Cone3D_Flex geometry,`angle` is used for all other geometries.
+            If None, does not slice on this dimension
+        vertical: int, optional
+            index on vertical dimension to slice on. If None, does not slice on this dimension.
+        horizontal: int, optional
+            index on horizontal dimension to slice on. If None, does not slice on this dimension.
+
+        Returns
+        -------
+        geometry_new: AcquisitionGeometry
+            The sliced AcquisitionGeometry
+
+        '''
+
+        if self.geom_type & AcquisitionType.CONE_FLEX:
+            return self._get_slice_with_projection(*args, **kwargs)
+        else:
+            return self._get_slice_with_angle(*args, **kwargs)
+        
 
     def allocate(self, value=0, **kwargs):
         '''Allocates an AcquisitionData according to the geometry

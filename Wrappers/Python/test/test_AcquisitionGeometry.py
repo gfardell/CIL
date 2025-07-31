@@ -1802,7 +1802,7 @@ class Test_Cone3D_Flex(unittest.TestCase):
             self.ag.get_centre_slice()
 
     def test_get_slice_angle(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             self.ag.get_slice(angle=0)
 
     def test_get_slice_projection(self):
@@ -1825,6 +1825,17 @@ class Test_Cone3D_Flex(unittest.TestCase):
         np.testing.assert_allclose(channel_slice.config.system.detector[0].direction_x, np.asarray([1,0.0, 0.0]))
         np.testing.assert_allclose(channel_slice.config.system.detector[0].direction_y, np.asarray([0.,0.,1]))
         self.assertEqual(len(channel_slice.config.system.source), 2)
+
+        channel_slice = self.ag.get_slice(1)
+        self.assertEqual(channel_slice.num_projections, 2)
+        self.assertEqual(channel_slice.channels, 1)
+        np.testing.assert_allclose(channel_slice.config.system.source[0].position, np.asarray([0,-1,0]))
+        np.testing.assert_allclose(channel_slice.config.system.detector[0].position, np.asarray([0,2,1]))
+        np.testing.assert_allclose(channel_slice.config.system.detector[0].direction_x, np.asarray([1,0.0, 0.0]))
+        np.testing.assert_allclose(channel_slice.config.system.detector[0].direction_y, np.asarray([0.,0.,1]))
+        self.assertEqual(len(channel_slice.config.system.source), 2)
+
+
 
     def test_get_slice_vertical(self):
         with self.assertRaises(NotImplementedError):

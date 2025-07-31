@@ -157,13 +157,9 @@ class Slicer(DataProcessor):
         for key in self._roi_input.keys():
             if key not in data.dimension_labels:
                 raise ValueError('Wrong label is specified for roi, expected one of {}.'.format(data.dimension_labels))
-            if isinstance(self._geometry , (AcquisitionGeometry)):
-                if self._geometry.geom_type & AcquisitionType.CONE_FLEX:
-                    if key not in ['projection', 'channel']:
-                        raise NotImplementedError("Cone-Flex geometry is not supported by this processor for slicing along any dimension other than 'projection' or 'channel'")
-                else:
-                    if key == 'projection':
-                        raise ValueError("'projection' axis does not exist for this geometry, perhaps you meant to use 'angle'?")
+            if isinstance(self._geometry , (AcquisitionGeometry)) and self._geometry.geom_type & AcquisitionType.CONE_FLEX \
+                    and key in ['vertical', 'horizontal']:
+                raise NotImplementedError("Cone-Flex geometry is not supported by this processor for slicing along 'vertical' or 'horizontal'")
 
 
         return True
