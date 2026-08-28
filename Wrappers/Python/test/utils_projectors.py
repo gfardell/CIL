@@ -157,8 +157,8 @@ class SimData(object):
         ag_new = AcquisitionGeometry.create_Cone3D_Flex(src_pos_set, det_pos_set, det_dir_x_set, det_dir_y_set)
         ag_new.set_panel([self.acq_data.geometry.pixel_num_h, self.acq_data.geometry.pixel_num_v], [self.acq_data.geometry.pixel_size_h, self.acq_data.geometry.pixel_size_v], origin='bottom-left')
         # Flex geometry has the same labels except uses PROJECTION instead of ANGLE:
-        new_labels = list(self.acq_data.dimension_labels)
-        new_labels[1] = AcquisitionDimension.PROJECTION
+        new_labels = [AcquisitionDimension.PROJECTION if label == AcquisitionDimension.ANGLE else label
+                      for label in self.acq_data.dimension_labels]
         ag_new.set_labels(new_labels)
 
         self.ag = ag_new
@@ -386,12 +386,14 @@ class TestCommon_ProjectionOperator_TOY(object):
 
     def Cone3DFlex(self):
         '''
-            These are all single cone beam projection geometries. Pixels of  1, 2, 0.5, 0.5, Voxels of 1, 2, 0.5, 0.25
+            These are all single cone beam projection geometries. Pixels of  2, 4, 1, 0.5, Voxels of 1, 2, 0.5, 0.25.
+            flex takes exact physical positions, so the detector is placed clear of the volume and the
+            pixel size scaled by the magnification, leaving the voxel size (and expected norm) unchanged.
         '''
 
         self.test_geometries=[]
-        ag_test_1 = AcquisitionGeometry.create_Cone3D_Flex(source_position_set=[[0,-1000,0]],detector_position_set=[[0,0,0]], detector_direction_x_set=[[1, 0, 0]],detector_direction_y_set=[[0, 0, 1]], volume_centre_position=[0,0,0])\
-                                            .set_panel([16,16],[1,1])
+        ag_test_1 = AcquisitionGeometry.create_Cone3D_Flex(source_position_set=[[0,-1000,0]],detector_position_set=[[0,1000,0]], detector_direction_x_set=[[1, 0, 0]],detector_direction_y_set=[[0, 0, 1]], volume_centre_position=[0,0,0])\
+                                            .set_panel([16,16],[2,2])
         ag_test_1.set_labels(AcquisitionDimension.get_order_for_engine(self.backend, ag_test_1))
 
         ig_test_1 = create_cone_flex_default_ig(ag_test_1)
@@ -399,16 +401,16 @@ class TestCommon_ProjectionOperator_TOY(object):
         self.test_geometries.append((ag_test_1, ig_test_1, 4))
 
 
-        ag_test_2 = AcquisitionGeometry.create_Cone3D_Flex(source_position_set=[[0,-1000,0]],detector_position_set=[[0,0,0]], detector_direction_x_set=[[1, 0, 0]],detector_direction_y_set=[[0, 0, 1]], volume_centre_position=[0,0,0])\
-                                            .set_panel([16,16],[2,2])
+        ag_test_2 = AcquisitionGeometry.create_Cone3D_Flex(source_position_set=[[0,-1000,0]],detector_position_set=[[0,1000,0]], detector_direction_x_set=[[1, 0, 0]],detector_direction_y_set=[[0, 0, 1]], volume_centre_position=[0,0,0])\
+                                            .set_panel([16,16],[4,4])
         ag_test_2.set_labels(AcquisitionDimension.get_order_for_engine(self.backend, ag_test_2))
 
         ig_test_2 = create_cone_flex_default_ig(ag_test_2)
         norm_2 = 8
         self.test_geometries.append((ag_test_2, ig_test_2, norm_2))
 
-        ag_test_3 = AcquisitionGeometry.create_Cone3D_Flex(source_position_set=[[0,-1000,0]],detector_position_set=[[0,0,0]], detector_direction_x_set=[[1, 0, 0]],detector_direction_y_set=[[0, 0, 1]], volume_centre_position=[0,0,0])\
-                                            .set_panel([16,16],[0.5,0.5])
+        ag_test_3 = AcquisitionGeometry.create_Cone3D_Flex(source_position_set=[[0,-1000,0]],detector_position_set=[[0,1000,0]], detector_direction_x_set=[[1, 0, 0]],detector_direction_y_set=[[0, 0, 1]], volume_centre_position=[0,0,0])\
+                                            .set_panel([16,16],[1,1])
         ag_test_3.set_labels(AcquisitionDimension.get_order_for_engine(self.backend, ag_test_3))
         ig_test_3 = create_cone_flex_default_ig(ag_test_3)
 
@@ -473,8 +475,10 @@ class TestCommon_ProjectionOperator(object):
                                             .set_labels(['horizontal'])
 
     def Cone3DFlex(self):
-        self.ag = AcquisitionGeometry.create_Cone3D_Flex(source_position_set=[[0,-100000,0]],detector_position_set=[[0,0,0]], detector_direction_x_set=[[1, 0, 0]],detector_direction_y_set=[[0, 0, 1]], volume_centre_position=[0,0,0])\
-                                            .set_panel([16,16],[1,1])\
+        # flex takes exact physical positions, so place the detector clear of the volume (mag=2,
+        # pixel size 2 -> footprint 1) rather than relying on virtual-detector rescaling
+        self.ag = AcquisitionGeometry.create_Cone3D_Flex(source_position_set=[[0,-100000,0]],detector_position_set=[[0,100000,0]], detector_direction_x_set=[[1, 0, 0]],detector_direction_y_set=[[0, 0, 1]], volume_centre_position=[0,0,0])\
+                                            .set_panel([16,16],[2,2])\
                                             .set_labels(['vertical','horizontal'])
         
     def test_forward_projector(self):

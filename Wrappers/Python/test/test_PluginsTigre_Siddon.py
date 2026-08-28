@@ -68,6 +68,31 @@ class Test_Cone3D_Geometry_tigre(unittest.TestCase, TestCommon_ProjectionOperato
 
 
 @unittest.skipUnless(has_tigre and has_nvidia, "Requires TIGRE GPU")
+class Test_Cone3DFlex_Projectors_basic_tigre(unittest.TestCase, TestCommon_ProjectionOperator):
+    def setUp(self):
+        setup_parameters(self)
+        self.Cone3DFlex()
+        self.tolerance_fp=0.16
+
+
+@unittest.skipUnless(has_tigre and has_nvidia, "Requires TIGRE GPU")
+class Test_Cone3DFlex_Projectors_sim_tigre(unittest.TestCase, TestCommon_ProjectionOperator_SIM):
+    def setUp(self):
+        setup_parameters(self)
+        self.Cone3DFlex()
+        self.tolerance_fp = 0.6
+
+
+@unittest.skipUnless(has_tigre and has_nvidia, "Requires TIGRE GPU")
+class Test_Cone3DFlex_Projectors_toy_tigre(unittest.TestCase, TestCommon_ProjectionOperator_TOY):
+    def setUp(self):
+        setup_parameters(self)
+        self.Cone3DFlex()
+        self.tolerance_linearity = 1e-2
+        self.tolerance_norm = 0.1
+
+
+@unittest.skipUnless(has_tigre and has_nvidia, "Requires TIGRE GPU")
 class Test_Cone2D_Projectors_basic_tigre(unittest.TestCase, TestCommon_ProjectionOperator):
     def setUp(self):
         setup_parameters(self)
