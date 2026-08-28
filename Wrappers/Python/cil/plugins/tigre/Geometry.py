@@ -55,12 +55,15 @@ class CIL2TIGREGeometry(object):
                 "This plugin requires the additional package TIGRE\n"
                 "Please install it via conda as tigre from the ccpi channel")
 
-        if ag.geom_type not in ['cone', 'parallel']:
+        if ag.geom_type not in ['cone', 'parallel', 'cone_flex']:
             raise ValueError(f"CIL cannot use TIGRE to process geometries of type {ag.geom_type}.")
 
         # work on a copy of the CIL geometry aligned to the TIGRE frame
         self._ag = ag.copy()
-        self._ag.config.system.align_reference_frame('tigre')
+        if self._ag.geom_type == 'cone_flex':
+            self._ag.config.system.set_origin(self._ag.config.system.volume_centre.position)
+        else:
+            self._ag.config.system.align_reference_frame('tigre')
         self._ig = ig
 
         # z-spin between the TIGRE and CIL frames, undone per view in _convert_angles
@@ -70,7 +73,10 @@ class CIL2TIGREGeometry(object):
         self.tg_geometry = Geometry()
         self.tg_geometry.accuracy = 0.5   # forward projection accuracy (voxels/sample)
 
-        self._scale_geometry()
+        # a flexible trajectory uses exact physical positions clear of the volume, so it is never
+        # scaled; other geometries may carry a virtual detector that must be pushed clear
+        if self._ag.geom_type != 'cone_flex':
+            self._scale_geometry()
         self._set_up_tigre_geometry()
 
     def _scale_geometry(self):
@@ -104,7 +110,9 @@ class CIL2TIGREGeometry(object):
         self._set_detector()
         self._set_volume()
 
-        if self._ag.geom_type == 'cone':
+        if self._ag.geom_type == 'cone_flex':
+            self.tg_angles = self._set_geometry_cone_flex()
+        elif self._ag.geom_type == 'cone':
             self.tg_angles = self._set_geometry_cone()
         else:
             self.tg_angles = self._set_geometry_parallel()
@@ -229,6 +237,49 @@ class CIL2TIGREGeometry(object):
         det_pos = D - det_dist * ray
         self.tg_geometry.offDetector = np.array([det_pos[2], det_pos[0], 0])
         return self._convert_angles()
+
+    def _set_geometry_cone_flex(self):
+        """Set the per-view cone-beam parameters for a flexible trajectory, and return the angles.
+
+        Each projection supplies its own source, detector centre and detector axes, mapped view by
+        view to the same TIGRE parameters the standard cone path produces for a single view.
+        """
+        system = self._ag.config.system
+        num = system.num_positions
+
+        self.tg_geometry.mode = 'cone'
+        self.tg_geometry.offOrigin = self._off_origin()
+
+        DSO = np.empty(num)
+        DSD = np.empty(num)
+        offDetector = np.empty((num, 3))
+        rotDetector = np.empty((num, 3))
+        euler = np.empty((num, 3))
+
+        for i in range(num):
+            S = system.source[i].position
+            D = system.detector[i].position
+            dx = system.detector[i].direction_x
+            dy = system.detector[i].direction_y
+
+            DSO[i], DSD[i], offDetector[i], rotDetector[i], B = \
+                self._cone_view_to_tigre(S, D, dx, dy)
+
+            # per-view volume rotation; a per-projection trajectory has no scan angle
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', message='Gimbal lock detected')
+                euler[i] = Rotation.from_matrix(B).as_euler('ZYZ')
+
+        if num == 1:
+            # TIGRE mistiles a length-1 DSO/DSD into a (1, 1) array; a scalar keeps a single view working
+            self.tg_geometry.DSO = float(DSO[0])
+            self.tg_geometry.DSD = float(DSD[0])
+        else:
+            self.tg_geometry.DSO = DSO
+            self.tg_geometry.DSD = DSD
+        self.tg_geometry.offDetector = offDetector
+        self.tg_geometry.rotDetector = rotDetector
+        return euler.astype(np.float32)
 
     def _set_panel_origin(self):
         """Rotate the panel around it's centre based on the panel origin to reflect the data direction
