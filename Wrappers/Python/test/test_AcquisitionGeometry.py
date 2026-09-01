@@ -24,7 +24,7 @@ import re
 import io
 import sys
 from cil.framework import AcquisitionGeometry, ImageGeometry, AcquisitionData, Partitioner, SystemConfiguration
-from cil.framework.labels import AcquisitionDimension
+from cil.framework.labels import AcquisitionDimension, AcquisitionType
 from utils import has_matplotlib
 
 if has_matplotlib:
@@ -613,6 +613,44 @@ class Test_AcquisitionGeometry(unittest.TestCase):
 
         self.assertEqual(AG2, AG_cs)
 
+    def test_get_3D(self):
+        AG = AcquisitionGeometry.create_Cone2D(source_position=[0,-500], detector_position=[0.,1000.])
+        AG.set_panel(1000, 0.1)
+        AG.set_angles([0,1,2,3,5])
+        AG.set_channels(4)
+        AG_3D = AG.get_3D()
+
+        AG_gold = AcquisitionGeometry.create_Cone3D(source_position=[0,-500,0], detector_position=[0.,1000.,0])
+        AG_gold.set_panel([1000,1], [0.1,0.1])
+        AG_gold.set_angles([0,1,2,3,5])
+        AG_gold.set_channels(4)
+
+        self.assertEqual(AG_3D, AG_gold)
+
+        #the panel has a single row of pixels, so the data described is unchanged
+        self.assertEqual(AG_3D.shape, AG.shape)
+        self.assertEqual(AG_3D.dimension_labels, AG.dimension_labels)
+
+        #the input is not modified
+        self.assertEqual(AG.dimension, AcquisitionType.DIM2)
+
+    def test_get_3D_panel(self):
+        #the returned panel describes a 3D system, so it accepts multiple rows of pixels
+        AG = AcquisitionGeometry.create_Parallel2D()
+        AG.set_panel(1000, 0.1)
+        AG.set_angles([0,1,2,3,5])
+
+        AG_3D = AG.get_3D()
+        AG_3D.set_panel([1000,20], [0.1,0.1])
+        self.assertEqual(AG_3D.shape, (5,20,1000))
+
+    def test_get_3D_of_3D(self):
+        AG = AcquisitionGeometry.create_Cone3D(source_position=[0,-500,0], detector_position=[0.,1000.,0])
+        AG.set_panel([1000,2000], [0.1,0.1])
+        AG.set_angles([0,1,2,3,5])
+
+        self.assertEqual(AG.get_3D(), AG)
+
     def test_allocate(self):
         AG = AcquisitionGeometry.create_Parallel3D()
         AG.set_channels(4)
@@ -834,6 +872,12 @@ class Test_Parallel2D(unittest.TestCase):
         AG2.config.system.get_centre_slice()
         self.assertEqual(AG.config.system, AG2.config.system)
 
+    def test_get_3D(self):
+        AG = AcquisitionGeometry.create_Parallel2D(ray_direction=[0.6,0.8], detector_position=[-5,1000.], detector_direction_x=[0.8,-0.6], rotation_axis_position=[1,2])
+        AG_gold = AcquisitionGeometry.create_Parallel3D(ray_direction=[0.6,0.8,0], detector_position=[-5,1000.,0], detector_direction_x=[0.8,-0.6,0], rotation_axis_position=[1,2,0])
+
+        self.assertEqual(AG.config.system.get_3D(), AG_gold.config.system)
+
     def test_calculate_magnification(self):
         AG = AcquisitionGeometry.create_Parallel2D()
         out = AG.config.system.calculate_magnification()
@@ -988,6 +1032,11 @@ class Test_Parallel3D(unittest.TestCase):
         AG = AcquisitionGeometry.create_Parallel3D(detector_direction_x=[1,0,1], detector_direction_y=[-1,0,1])
         with self.assertRaises(ValueError):
             cs = AG.config.system.get_centre_slice()
+
+    def test_get_3D(self):
+        #the system is already 3D
+        AG = AcquisitionGeometry.create_Parallel3D(ray_direction=[0,1,1])
+        self.assertIs(AG.config.system.get_3D(), AG.config.system)
 
     def test_calculate_magnification(self):
         AG = AcquisitionGeometry.create_Parallel3D()
@@ -1221,6 +1270,16 @@ class Test_Cone2D(unittest.TestCase):
         AG2.config.system.get_centre_slice()
         self.assertEqual(AG.config.system, AG2.config.system)
 
+    def test_get_3D(self):
+        AG = AcquisitionGeometry.create_Cone2D(source_position=[5,-500], detector_position=[-5,1000.], detector_direction_x=[0.8,0.6], rotation_axis_position=[1,2])
+        AG_gold = AcquisitionGeometry.create_Cone3D(source_position=[5,-500,0], detector_position=[-5,1000.,0], detector_direction_x=[0.8,0.6,0], rotation_axis_position=[1,2,0])
+
+        system_3D = AG.config.system.get_3D()
+        self.assertEqual(system_3D, AG_gold.config.system)
+
+        #the system is unchanged, so the distances it describes are too
+        np.testing.assert_allclose(system_3D.calculate_magnification(), AG.config.system.calculate_magnification())
+
     def test_calculate_magnification(self):
         AG = AcquisitionGeometry.create_Cone2D(source_position=[0,-500], detector_position=[0.,1000.])
         out = AG.config.system.calculate_magnification()
@@ -1415,6 +1474,11 @@ class Test_Cone3D(unittest.TestCase):
         AG = AcquisitionGeometry.create_Cone3D(source_position=[0,-500,0], detector_position=[0,1000,0],detector_direction_x=[1,0,1], detector_direction_y=[-1,0,1])
         with self.assertRaises(ValueError):
             cs = AG.config.system.get_centre_slice()
+
+    def test_get_3D(self):
+        #the system is already 3D
+        AG = AcquisitionGeometry.create_Cone3D(source_position=[0,-500,0], detector_position=[0,1000,0], rotation_axis_direction=[1,0,1])
+        self.assertIs(AG.config.system.get_3D(), AG.config.system)
 
     def test_calculate_magnification(self):
         AG = AcquisitionGeometry.create_Cone3D(source_position=[0,-500,0], detector_position=[0.,1000.,0])

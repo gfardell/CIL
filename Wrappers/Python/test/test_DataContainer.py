@@ -556,8 +556,26 @@ class TestDataContainer(CCPiTestClass):
         ig = ImageGeometry(2,2)
 
         with self.assertWarns(UserWarning):
-            # assert raises warning if kwarg value unused 
+            # assert raises warning if kwarg value unused
             data = ImageData(value=np.array([[1, 2], [3, 4]]), geometry=ig)
+
+    def test_ImageGeometry_get_3D(self):
+        ig = ImageGeometry(voxel_num_x=4, voxel_num_y=3, voxel_size_x=0.5, voxel_size_y=0.5, channels=2)
+        ig_3D = ig.get_3D()
+
+        self.assertEqual(ig_3D, ImageGeometry(voxel_num_x=4, voxel_num_y=3, voxel_num_z=1,
+                                              voxel_size_x=0.5, voxel_size_y=0.5, voxel_size_z=0.5, channels=2))
+
+        #the volume has a single slice, so the data described is unchanged
+        self.assertEqual(ig_3D.shape, ig.shape)
+        self.assertEqual(ig_3D.dimension_labels, ig.dimension_labels)
+
+        #the input is not modified
+        self.assertEqual(ig.voxel_num_z, 0)
+
+    def test_ImageGeometry_get_3D_of_3D(self):
+        ig = ImageGeometry(voxel_num_x=4, voxel_num_y=3, voxel_num_z=2)
+        self.assertIs(ig.get_3D(), ig)
 
 
     def test_ImageGeometry_allocate(self):

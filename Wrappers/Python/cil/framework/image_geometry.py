@@ -196,6 +196,25 @@ class ImageGeometry(metaclass=BackwardCompat):
 
         return geometry_new
 
+    def get_3D(self):
+        '''returns a 3D ImageGeometry that describes the same volume as the input
+
+        Notes
+        -----
+        A 2D volume is described in the x-y plane, this returns the equivalent volume in 3D as a
+        single slice of cubic voxels centred on z=0. The data is unchanged, the volume has a single
+        slice so the shape and dimension_labels of the returned geometry match the input.
+        '''
+
+        if self.voxel_num_z > 0:
+            return self
+
+        geometry_new = self.copy()
+        geometry_new.voxel_num_z = 1
+        geometry_new.voxel_size_z = self.voxel_size_x
+        geometry_new.center_z = 0
+        return geometry_new
+
     def get_order_by_label(self, dimension_labels, default_dimension_labels):
         order = []
         for i, el in enumerate(default_dimension_labels):

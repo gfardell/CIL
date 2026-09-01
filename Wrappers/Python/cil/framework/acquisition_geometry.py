@@ -366,6 +366,11 @@ class SystemConfiguration:
         """
         raise NotImplementedError
 
+    def get_3D(self):
+        """Returns the 3D system configuration describing the same system
+        """
+        raise NotImplementedError
+
     def calculate_magnification(self):
         r'''Calculates the magnification of the system using the source to rotate axis,
         and source to detector distance along the direction.
@@ -542,6 +547,17 @@ class Parallel2D(SystemConfiguration):
 
     def get_centre_slice(self):
         return self
+
+    def get_3D(self):
+        """Returns the 3D system configuration describing the same system, in the z=0 plane
+        """
+        return Parallel3D(numpy.append(self.ray.direction, 0),
+                          numpy.append(self.detector.position, 0),
+                          numpy.append(self.detector.direction_x, 0),
+                          [0, 0, 1],
+                          numpy.append(self.rotation_axis.position, 0),
+                          [0, 0, 1],
+                          self.units)
 
     def calculate_magnification(self):
         '''Method to calculate magnification and distance from the sample to
@@ -749,6 +765,12 @@ class Parallel3D(SystemConfiguration):
             raise ValueError('Cannot convert geometry to 2D. Requires axis of rotation to be perpendicular to ray direction and the detector direction x.')
 
 
+    def get_3D(self):
+        """Returns the 3D system configuration describing the same system
+        """
+        return self
+
+
     def rotation_axis_on_detector(self):
         """
         Calculates the position, on the detector, of the projection of the rotation axis in the world coordinate system
@@ -953,6 +975,17 @@ class Cone2D(SystemConfiguration):
     def get_centre_slice(self):
         return self
 
+    def get_3D(self):
+        """Returns the 3D system configuration describing the same system, in the z=0 plane
+        """
+        return Cone3D(numpy.append(self.source.position, 0),
+                      numpy.append(self.detector.position, 0),
+                      numpy.append(self.detector.direction_x, 0),
+                      [0, 0, 1],
+                      numpy.append(self.rotation_axis.position, 0),
+                      [0, 0, 1],
+                      self.units)
+
     def calculate_magnification(self):
 
         ab = (self.rotation_axis.position - self.source.position)
@@ -1144,6 +1177,11 @@ class Cone3D(SystemConfiguration):
             return Cone2D(source_position, detector_position, detector_direction_x, rotation_axis_position)
         else:
             raise ValueError('Cannot convert geometry to 2D. Requires axis of rotation to be perpendicular to the detector.')
+
+    def get_3D(self):
+        """Returns the 3D system configuration describing the same system
+        """
+        return self
 
     def __str__(self):
         def csv(val):
@@ -1346,6 +1384,11 @@ class Cone3D_Flex(SystemConfiguration):
         """Returns the 2D system configuration corresponding to the centre slice
         """
         raise TypeError('Cone3D_Flex does not support get_centre_slice(). Use the Cone3D or Cone2D classes for 2D slices.')
+
+    def get_3D(self):
+        """Returns the 3D system configuration describing the same system
+        """
+        return self
 
     def __str__(self):
         def csv(val):
@@ -2526,6 +2569,26 @@ class AcquisitionGeometry(metaclass=BackwardCompat):
         AG_2D.config.panel.num_pixels[1] = 1
         AG_2D.config.panel.pixel_size[1] = abs(self.config.system.detector.direction_y[2]) * self.config.panel.pixel_size[1]
         return AG_2D
+
+    def get_3D(self):
+        '''returns a 3D AcquisitionGeometry that describes the same system as the input
+
+        Notes
+        -----
+        A 2D system is described in the x-y plane, this returns the equivalent system in 3D with a
+        single row of pixels in the z=0 plane. The data is unchanged, the panel has a single row so
+        the shape and dimension_labels of the returned geometry match the input.
+        '''
+
+        if AcquisitionType.DIM3 & self.dimension:
+            return self
+
+        AG_3D = copy.deepcopy(self)
+        AG_3D.config.system = self.config.system.get_3D()
+
+        #rebuild the panel, it is created knowing the dimension of the system
+        AG_3D.set_panel(self.config.panel.num_pixels, self.config.panel.pixel_size, self.config.panel.origin)
+        return AG_3D
 
     def get_ImageGeometry(self, resolution=1.0):
         """

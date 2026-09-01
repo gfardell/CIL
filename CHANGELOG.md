@@ -1,6 +1,7 @@
 * x.x.x
   - New features:
     - Added `Huber Loss` function (#2281)
+    - Added `get_3D` method to `AcquisitionGeometry` and `ImageGeometry`, returning the equivalent geometry promoted to 3D
   - Enhancements:
     - `GenericFilteredBackProjection`'s `plot_filter` returns a `matplotlib.figure.Figure` instead of a `matplotlib.pyplot` (#2360)
 
